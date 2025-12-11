@@ -10,6 +10,8 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.pyc
+.DS_Store
 
 # Temp directories, notebooks created by jupyterlab
 .ipynb_checkpoints
@@ -30,6 +32,16 @@ lib64/
 parts/
 sdist/
 var/
+
+# Large AI files
+.gguf
+*.gguf
+*.bin
+*.safetensors
+models/*.gguf
+models/*.bin
+models/*.safetensors
+
 wheels/
 share/python-wheels/
 *.egg-info/
@@ -54,4 +66,4 @@ cover/
 
 # Workbench Project Layout
 data/scratch/*
-!data/scratch/.gitkeep
+!data/scratch/.gitkeepvariables.env

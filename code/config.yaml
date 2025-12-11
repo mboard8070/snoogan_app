@@ -1,0 +1,16 @@
+model:
+  backend: "gguf"
+  name: "models/gemma-2-2b-it-Q5_K_M.gguf"      # ← points to the existing models folder
+  modelfile: "models/Modelfile"                # ← same folder
+  live_trading: true
+  contract_size: 1
+  max_daily_loss_pct: 3
+  profit_target_pct: 50
+  stop_loss_multiplier: 2.1
+  time_cutoff: "16:00 EST"
+
+discord:
+  webhook_url: "YOUR_DISCORD_WEBHOOK_HERE"   # drop your real webhook later
+
+logging:
+  level: "INFO"
