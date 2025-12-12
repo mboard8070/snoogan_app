@@ -7,12 +7,28 @@
 .DS_Store
 *.swp
 *~
+.vscode/
+.idea/
+
+# Logs & runtime files
+*.log
+nohup.out
+dashboard.log
+*.csv   # any temp data dumps
+*.pkl   # pickled models, backtests, etc.
+
+# Secrets & keys (NEVER commit)
+*.key
+*.pem
+secrets/
+config/*.key
 
 # Our local scripts & logs
 start-dashboard.sh
 stop-dashboard.sh
 dashboard.log
 nohup.out
+*.sh
 
 # Streamlit junk
 .streamlit/
@@ -61,6 +77,13 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+
+# Large files / data
+data/
+datasets/
+*.h5
+*.pth
+*.pt
 
 # Unit test / coverage reports
 htmlcov/
