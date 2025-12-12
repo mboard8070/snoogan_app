@@ -5,8 +5,21 @@
 
 # General ignores
 .DS_Store
+*.swp
+*~
+
+# Our local scripts & logs
+start-dashboard.sh
+stop-dashboard.sh
+dashboard.log
+nohup.out
+
+# Streamlit junk
+.streamlit/
+.streamlit/secrets.toml
 
 # Byte-compiled / optimized / DLL files
+venv/
 __pycache__/
 *.py[cod]
 *$py.class
