@@ -103,3 +103,5 @@ cover/
 # Workbench Project Layout
 data/scratch/*
 !data/scratch/.gitkeepvariables.env
+
+!data/scratch/.gitkeep
