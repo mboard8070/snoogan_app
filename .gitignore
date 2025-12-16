@@ -1,107 +1,64 @@
-# Ignore generated or temporary files managed by the Workbench
+# Workbench generated files
 .project/*
 !.project/spec.yaml
 !.project/configpacks
 
-# General ignores
+# macOS / OS junk
 .DS_Store
-*.swp
-*~
+Thumbs.db
+
+# Editor / IDE
 .vscode/
 .idea/
+*.swp
+*~
+*.sublime-workspace
+*.sublime-project
 
-# Logs & runtime files
-*.log
-nohup.out
-dashboard.log
-*.csv   # any temp data dumps
-*.pkl   # pickled models, backtests, etc.
+# Python / venv
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+venv/
+env/
+.venv/
+ENV/
 
-# Secrets & keys (NEVER commit)
+# Streamlit specific
+.streamlit/
+streamlit_config.toml
+.streamlit/secrets.toml
+
+# Environment & secrets (CRITICAL — never commit)
+.env
 *.key
 *.pem
 secrets/
 config/*.key
 
-# Our local scripts & logs
+# Logs & runtime
+*.log
+nohup.out
+dashboard.log
+
+# Data / temp files
+*.csv
+*.pkl
+*.sqlite3
+*.db
+trade_history.csv
+logs/
+
+# Local scripts
+*.sh
 start-dashboard.sh
 stop-dashboard.sh
-dashboard.log
-nohup.out
-*.sh
 
-# Streamlit junk
-.streamlit/
-.streamlit/secrets.toml
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
 
-# Byte-compiled / optimized / DLL files
-venv/
-__pycache__/
-*.py[cod]
-*$py.class
-*.pyc
-.DS_Store
-
-# Temp directories, notebooks created by jupyterlab
-.ipynb_checkpoints
-.Trash-*/
-.jupyter/
-.local/
-
-# Python distribution / packaging
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-
-# Large AI files
-.gguf
-*.gguf
-*.bin
-*.safetensors
-models/*.gguf
-models/*.bin
-models/*.safetensors
-
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
-
-# Large files / data
-data/
-datasets/
-*.h5
-*.pth
-*.pt
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py,cover
-.hypothesis/
-.pytest_cache/
-cover/
-
-# Workbench Project Layout
-data/scratch/*
-!data/scratch/.gitkeepvariables.env
-
-!data/scratch/.gitkeep
+# Misc
+*.bak
+*.tmp

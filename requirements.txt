@@ -6,7 +6,6 @@ requests==2.32.3
 yfinance==0.2.44
 gymnasium==0.29.1
 stable-baselines3==2.3.2
-streamlit==1.38.0
 plotly==5.24.1
 discord.py==2.4.0
 pypdf==4.3.1
@@ -21,3 +20,6 @@ torch
 torchvision
 torchaudio
 polygon-api-client
+alpaca-py
+scipy
+streamlit
