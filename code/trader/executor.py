@@ -1,5 +1,6 @@
 # trader/executor.py - paper execution (real Alpaca live switch later)
 
+import os
 from datetime import datetime
 
 class Executor:
