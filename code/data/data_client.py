@@ -1,4 +1,4 @@
-# data_client.py – FINAL VERSION (SPY chain for reliable M-F 0DTE + BSM fallback)
+# data_client.py – UPDATED VERSION (Includes get_spy_option_chain)
 
 from dotenv import load_dotenv
 import os
@@ -12,15 +12,13 @@ from scipy.optimize import brentq
 load_dotenv()
 
 DATA_PROVIDER = os.getenv("DATA_PROVIDER", "alpaca")
-
 ALPACA_API_KEY = os.getenv("ALPACA_API_KEY")
 ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
-
 MODE = os.getenv("MODE", "internal")
 STARTING_BALANCE = float(os.getenv("STARTING_BALANCE", "100000"))
 CONTRACT_SIZE = int(os.getenv("CONTRACT_SIZE", "1"))
 
-# --- Black-Scholes Model Functions (unchanged) ---
+# --- Black-Scholes Model Functions ---
 def black_scholes_price(S, K, T, r, sigma, option_type):
     if T <= 0 or sigma <= 0:
         return max(0, (S - K) if option_type == 'call' else (K - S))
@@ -89,23 +87,27 @@ if DATA_PROVIDER == "alpaca":
                 df = df.tz_localize(None)
             return df
 
-        def get_spx_option_chain(self, expiration_date: str) -> pd.DataFrame:
-            # Use SPY for reliable M-F 0DTE chain (SPX index chain limited in Alpaca)
+        # FIX: Renamed to match the strategy's request for SPY
+        def get_spy_option_chain(self, expiration_date: str) -> pd.DataFrame:
+            """Fetches the SPY option chain and calculates Greeks."""
             request = OptionChainRequest(
                 underlying_symbol="SPY",
                 expiration_date=expiration_date
             )
             chain_dict = self.option_client.get_option_chain(request)
+            
+            # Guard against empty/None API response
+            if not chain_dict:
+                return pd.DataFrame()
 
-            # Live SPY as S proxy (exact underlying)
+            # Get current price for BSM calculations
             try:
                 end_time = datetime.now()
                 start_time = end_time - timedelta(minutes=5)
                 current_bars = self.get_spy_bars(start_time, end_time)
                 S = current_bars['close'].iloc[-1]
             except Exception:
-                print("Warning: SPY bars fail — BSM S fallback to 680")
-                S = 680.0
+                S = 680.0  # Fallback proxy
 
             r = 0.04
             now = datetime.now()
@@ -117,10 +119,10 @@ if DATA_PROVIDER == "alpaca":
 
             for symbol, snap in chain_dict.items():
                 m = symbol_pattern.search(symbol)
-                if not m:
-                    continue
+                if not m: continue
+                
                 opt_type = "call" if m.group(1) == "C" else "put"
-                K = float(m.group(2)) / 1000.0  # padded 8-digit → real strike
+                K = float(m.group(2)) / 1000.0
 
                 bid_price = snap.latest_quote.bid_price if snap.latest_quote else None
                 ask_price = snap.latest_quote.ask_price if snap.latest_quote else None
@@ -131,38 +133,31 @@ if DATA_PROVIDER == "alpaca":
                 calc_theta = snap.greeks.theta if snap.greeks else None
                 calc_vega = snap.greeks.vega if snap.greeks else None
 
-                if (calc_iv is None or calc_delta is None) and bid_price and ask_price and bid_price > 0 and ask_price > 0:
+                # Fallback to BSM if Greeks are missing from API
+                if (calc_iv is None or calc_delta is None) and bid_price and ask_price and bid_price > 0:
                     mid_price = (bid_price + ask_price) / 2
                     calculated_iv = calculate_implied_volatility(mid_price, S, K, T, r, opt_type)
                     if calculated_iv is not None:
                         calc_iv = calculated_iv
                         calc_delta, calc_gamma, calc_theta, calc_vega = calculate_greeks(S, K, T, r, calculated_iv, opt_type)
 
-                row = {
-                    "symbol": symbol,
-                    "strike_price": K,
-                    "option_type": opt_type,
-                    "bid_price": bid_price,
-                    "ask_price": ask_price,
-                    "delta": calc_delta,
-                    "gamma": calc_gamma,
-                    "theta": calc_theta,
-                    "vega": calc_vega,
+                rows.append({
+                    "symbol": symbol, "strike_price": K, "option_type": opt_type,
+                    "bid_price": bid_price, "ask_price": ask_price,
+                    "delta": calc_delta, "gamma": calc_gamma, "theta": calc_theta, "vega": calc_vega,
                     "implied_volatility": calc_iv,
-                }
-                rows.append(row)
+                })
 
             return pd.DataFrame(rows)
 
+        # Keep legacy method name for compatibility if needed elsewhere
+        def get_spx_option_chain(self, expiration_date: str) -> pd.DataFrame:
+            return self.get_spy_option_chain(expiration_date)
+
 elif DATA_PROVIDER == "polygon":
     class DataClient:
-        def __init__(self):
-            raise NotImplementedError("Polygon stub")
-
-        def get_spy_bars(self, start, end):
-            raise NotImplementedError
-
-        def get_spx_option_chain(self, expiration_date):
-            raise NotImplementedError
+        def __init__(self): raise NotImplementedError("Polygon stub")
+        def get_spy_bars(self, start, end): raise NotImplementedError
+        def get_spy_option_chain(self, expiration_date): raise NotImplementedError
 
 data_client = DataClient()
