@@ -11,7 +11,8 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parent
 CODE_DIR = PROJECT_ROOT / "code"
 for p in [PROJECT_ROOT, CODE_DIR, CODE_DIR / "trader", CODE_DIR / "rag"]:
-    if str(p.resolve()) not in sys.path: sys.path.insert(0, str(p.resolve()))
+    if str(p.resolve()) not in sys.path:
+        sys.path.insert(0, str(p.resolve()))
 
 ENV_PATH = PROJECT_ROOT / "variables.env"
 load_dotenv(ENV_PATH)
@@ -32,18 +33,19 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 3. BRAIN & ROUTER LOGIC (RESTORED) ---
+# --- 3. BRAIN & ROUTER LOGIC ---
 @st.cache_resource
 def load_brain(): return SnoogansBrain(chunk_size=400, chunk_overlap=150)
-
 RAG_BRAIN = load_brain()
-ROUTER_LLM = OllamaLLM(model="snoogans:latest", temperature=0.0, base_url="http://127.0.0.1:11434")
+ROUTER_LLM = OllamaLLM(model="snoogans:latest", temperature=0.0, base_url="http://127.0.1:11434")
 router_prompt = PromptTemplate.from_template("Classify as 'MANIFESTO' or 'GENERAL'. Question: {question}\nAnswer:")
 router_chain = router_prompt | ROUTER_LLM | StrOutputParser()
 
 def get_snoogans_rant(question: str) -> str:
-    try: classification = router_chain.invoke({"question": question}).strip().upper()
-    except: classification = "GENERAL"
+    try:
+        classification = router_chain.invoke({"question": question}).strip().upper()
+    except:
+        classification = "GENERAL"
     if "MANIFESTO" in classification:
         st.toast("Query classified as **MANIFESTO**. Using RAG context.")
         return RAG_BRAIN.ask_rag(question)
@@ -53,7 +55,22 @@ def get_snoogans_rant(question: str) -> str:
 if 'strategy' not in st.session_state:
     st.session_state.strategy = TradingStrategy()
 
-# Restore Equity History for Charting
+# Load completed trades count for brain progress
+COMPLETED_TRADES_FILE = PROJECT_ROOT / "completed_trades.json"
+BATCH_SIZE = 30
+trade_count = 0
+if COMPLETED_TRADES_FILE.exists():
+    try:
+        with open(COMPLETED_TRADES_FILE, 'r') as f:
+            completed = json.load(f)
+            trade_count = len(completed)
+    except:
+        trade_count = 0
+
+progress = min(trade_count / BATCH_SIZE, 1.0)
+trades_till_batch = BATCH_SIZE - (trade_count % BATCH_SIZE)
+
+# Restore Equity History
 if 'equity_history' not in st.session_state:
     st.session_state.equity_history = [float(os.getenv("STARTING_BALANCE", 100000))]
 
@@ -61,29 +78,28 @@ bal = float(os.getenv("STARTING_BALANCE", 100000))
 pnl = st.session_state.strategy.daily_pnl
 current_eq = bal + pnl
 
-# Update history if pnl changed
 if st.session_state.equity_history[-1] != current_eq:
     st.session_state.equity_history.append(current_eq)
 
+# Header metrics
 m1, m2, m3, m4 = st.columns([2, 2, 4, 2])
 m1.metric("Equity", f"${current_eq:,.2f}")
 m2.metric("Daily PnL", f"${pnl:+.2f}")
 with m3:
-    # Simulated progress - replace with actual trade count if available
-    st.caption("Brain Learning Progress (Batch of 30)")
-    st.progress(0.1) 
+    st.caption(f"Brain Learning Progress → {trade_count}/{trade_count // BATCH_SIZE * BATCH_SIZE + BATCH_SIZE} (Next batch in {trades_till_batch} trades)")
+    st.progress(progress)
+    if trades_till_batch == BATCH_SIZE:  # Just completed a batch
+        st.success("🍃 Fresh knowledge batch dropped – RAG brain gettin' fatter")
 m4.metric("Market", "🟢 OPEN" if dt_time(9,30) <= datetime.now().time() <= dt_time(16,0) else "🔴 CLOSED")
 
 st.divider()
 
-# --- 5. DASHBOARD GRID (RESTORED) ---
+# --- 5. DASHBOARD GRID ---
 col_left, col_right = st.columns([1, 1], gap="medium")
-
 with col_left:
     st.subheader("Performance & Position")
-    # Restore the Equity Graph
     st.line_chart(pd.DataFrame({'Equity': st.session_state.equity_history}), height=230)
-    
+   
     with st.container(border=True):
         pos = st.session_state.strategy.position
         if pos:
@@ -94,17 +110,16 @@ with col_left:
 
 with col_right:
     t1, t2 = st.tabs(["💬 Snoogans Chat", "📜 Trading Logs"])
-    
+   
     with t1:
-        # Restore Chat Interface
         chat_box = st.container(height=360)
         if "chat" not in st.session_state:
             st.session_state.chat = [{"role": "assistant", "content": "Router active. Standing by."}]
-        
+       
         with chat_box:
             for msg in st.session_state.chat:
                 with st.chat_message(msg["role"]): st.markdown(msg["content"])
-        
+       
         if prompt := st.chat_input("Ask Snoogans..."):
             st.session_state.chat.append({"role": "user", "content": prompt})
             with st.chat_message("assistant"):
@@ -122,17 +137,16 @@ with col_right:
 def sync_trading_cycle():
     output_buffer = io.StringIO()
     initial_pos = json.dumps(st.session_state.strategy.position)
-    
+   
     with redirect_stdout(output_buffer):
         try:
             st.session_state.strategy.run_cycle()
         except Exception as e:
             print(f"Cycle Error: {e}")
-    
-    # Force UI update if trade state changed
+   
     if initial_pos != json.dumps(st.session_state.strategy.position):
         st.rerun()
-
+    
     log_display.code(output_buffer.getvalue() or "Scanning...", language="bash", wrap_lines=True)
 
 sync_trading_cycle()
