@@ -62,3 +62,9 @@ stop-dashboard.sh
 # Misc
 *.bak
 *.tmp
+
+completed_trades.json
+.current_position.json
+data/knowledge/
+daily_pnl.json
+equity_history.json

@@ -37,7 +37,7 @@ st.markdown("""
 @st.cache_resource
 def load_brain(): return SnoogansBrain(chunk_size=400, chunk_overlap=150)
 RAG_BRAIN = load_brain()
-ROUTER_LLM = OllamaLLM(model="snoogans:latest", temperature=0.0, base_url="http://127.0.1:11434")
+ROUTER_LLM = OllamaLLM(model="snoogans:latest", temperature=0.0, base_url="http://127.0.0.1:11434")
 router_prompt = PromptTemplate.from_template("Classify as 'MANIFESTO' or 'GENERAL'. Question: {question}\nAnswer:")
 router_chain = router_prompt | ROUTER_LLM | StrOutputParser()
 
@@ -70,16 +70,10 @@ if COMPLETED_TRADES_FILE.exists():
 progress = min(trade_count / BATCH_SIZE, 1.0)
 trades_till_batch = BATCH_SIZE - (trade_count % BATCH_SIZE)
 
-# Restore Equity History
-if 'equity_history' not in st.session_state:
-    st.session_state.equity_history = [float(os.getenv("STARTING_BALANCE", 100000))]
-
+# Equity
 bal = float(os.getenv("STARTING_BALANCE", 100000))
 pnl = st.session_state.strategy.daily_pnl
 current_eq = bal + pnl
-
-if st.session_state.equity_history[-1] != current_eq:
-    st.session_state.equity_history.append(current_eq)
 
 # Header metrics
 m1, m2, m3, m4 = st.columns([2, 2, 4, 2])
@@ -88,7 +82,7 @@ m2.metric("Daily PnL", f"${pnl:+.2f}")
 with m3:
     st.caption(f"Brain Learning Progress → {trade_count}/{trade_count // BATCH_SIZE * BATCH_SIZE + BATCH_SIZE} (Next batch in {trades_till_batch} trades)")
     st.progress(progress)
-    if trades_till_batch == BATCH_SIZE:  # Just completed a batch
+    if trades_till_batch == BATCH_SIZE:
         st.success("🍃 Fresh knowledge batch dropped – RAG brain gettin' fatter")
 m4.metric("Market", "🟢 OPEN" if dt_time(9,30) <= datetime.now().time() <= dt_time(16,0) else "🔴 CLOSED")
 
@@ -96,17 +90,25 @@ st.divider()
 
 # --- 5. DASHBOARD GRID ---
 col_left, col_right = st.columns([1, 1], gap="medium")
+
 with col_left:
     st.subheader("Performance & Position")
-    st.line_chart(pd.DataFrame({'Equity': st.session_state.equity_history}), height=230)
+    st.line_chart(
+        pd.Series(st.session_state.strategy.equity_history, name="Equity"),
+        height=230
+    )
    
     with st.container(border=True):
-        pos = st.session_state.strategy.position
-        if pos:
-            st.write("**Current Position:**")
-            st.table(pd.DataFrame([pos]))
+        if st.session_state.strategy.positions:
+            st.write("**Current Positions:**")
+            pos_list = []
+            for ticker, p in st.session_state.strategy.positions.items():
+                row = p.copy()
+                row['ticker'] = ticker
+                pos_list.append(row)
+            st.table(pd.DataFrame(pos_list))
         else:
-            st.info("Scanning for .30 Delta Setup...")
+            st.info("Scanning SPY / QQQ / IWM for .30 Delta setups...")
 
 with col_right:
     t1, t2 = st.tabs(["💬 Snoogans Chat", "📜 Trading Logs"])
@@ -136,16 +138,12 @@ with col_right:
 @st.fragment(run_every=10)
 def sync_trading_cycle():
     output_buffer = io.StringIO()
-    initial_pos = json.dumps(st.session_state.strategy.position)
    
     with redirect_stdout(output_buffer):
         try:
             st.session_state.strategy.run_cycle()
         except Exception as e:
             print(f"Cycle Error: {e}")
-   
-    if initial_pos != json.dumps(st.session_state.strategy.position):
-        st.rerun()
     
     log_display.code(output_buffer.getvalue() or "Scanning...", language="bash", wrap_lines=True)
 

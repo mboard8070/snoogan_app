@@ -1,5 +1,4 @@
-# data_client.py – UPDATED VERSION (Includes get_spy_option_chain)
-
+# data_client.py – Multi-ticker support (SPY, QQQ, IWM)
 from dotenv import load_dotenv
 import os
 import pandas as pd
@@ -71,9 +70,9 @@ if DATA_PROVIDER == "alpaca":
             self.contract_size = CONTRACT_SIZE
             self.mode = MODE
 
-        def get_spy_bars(self, start: datetime, end: datetime) -> pd.DataFrame:
+        def get_spy_bars(self, start: datetime, end: datetime, ticker: str = "SPY") -> pd.DataFrame:
             request = StockBarsRequest(
-                symbol_or_symbols="SPY",
+                symbol_or_symbols=ticker,
                 timeframe=TimeFrame.Minute,
                 start=start,
                 end=end,
@@ -87,27 +86,25 @@ if DATA_PROVIDER == "alpaca":
                 df = df.tz_localize(None)
             return df
 
-        # FIX: Renamed to match the strategy's request for SPY
-        def get_spy_option_chain(self, expiration_date: str) -> pd.DataFrame:
-            """Fetches the SPY option chain and calculates Greeks."""
+        def get_spy_option_chain(self, expiration_date: str, ticker: str = "SPY") -> pd.DataFrame:
+            """Fetches option chain for given ticker and calculates Greeks."""
             request = OptionChainRequest(
-                underlying_symbol="SPY",
+                underlying_symbol=ticker,
                 expiration_date=expiration_date
             )
             chain_dict = self.option_client.get_option_chain(request)
-            
-            # Guard against empty/None API response
+           
             if not chain_dict:
                 return pd.DataFrame()
 
-            # Get current price for BSM calculations
+            # Get current underlying price
             try:
                 end_time = datetime.now()
                 start_time = end_time - timedelta(minutes=5)
-                current_bars = self.get_spy_bars(start_time, end_time)
+                current_bars = self.get_spy_bars(start_time, end_time, ticker=ticker)
                 S = current_bars['close'].iloc[-1]
             except Exception:
-                S = 680.0  # Fallback proxy
+                S = {"SPY": 680.0, "QQQ": 480.0, "IWM": 220.0}.get(ticker, 100.0)
 
             r = 0.04
             now = datetime.now()
@@ -115,25 +112,24 @@ if DATA_PROVIDER == "alpaca":
             T = max(((expiration_dt - now).total_seconds() / (365.25 * 24 * 3600)), 1e-6)
 
             rows = []
-            symbol_pattern = re.compile(r'SPY\d{6}([CP])(\d{8})')
+            # Generic symbol pattern – works for SPY, QQQ, IWM
+            symbol_pattern = re.compile(rf'{ticker}\d{{6}}([CP])(\d{{8}})')
 
             for symbol, snap in chain_dict.items():
                 m = symbol_pattern.search(symbol)
-                if not m: continue
-                
+                if not m:
+                    continue
+               
                 opt_type = "call" if m.group(1) == "C" else "put"
                 K = float(m.group(2)) / 1000.0
-
                 bid_price = snap.latest_quote.bid_price if snap.latest_quote else None
                 ask_price = snap.latest_quote.ask_price if snap.latest_quote else None
-
                 calc_iv = snap.implied_volatility
                 calc_delta = snap.greeks.delta if snap.greeks else None
                 calc_gamma = snap.greeks.gamma if snap.greeks else None
                 calc_theta = snap.greeks.theta if snap.greeks else None
                 calc_vega = snap.greeks.vega if snap.greeks else None
 
-                # Fallback to BSM if Greeks are missing from API
                 if (calc_iv is None or calc_delta is None) and bid_price and ask_price and bid_price > 0:
                     mid_price = (bid_price + ask_price) / 2
                     calculated_iv = calculate_implied_volatility(mid_price, S, K, T, r, opt_type)
@@ -142,22 +138,28 @@ if DATA_PROVIDER == "alpaca":
                         calc_delta, calc_gamma, calc_theta, calc_vega = calculate_greeks(S, K, T, r, calculated_iv, opt_type)
 
                 rows.append({
-                    "symbol": symbol, "strike_price": K, "option_type": opt_type,
-                    "bid_price": bid_price, "ask_price": ask_price,
-                    "delta": calc_delta, "gamma": calc_gamma, "theta": calc_theta, "vega": calc_vega,
+                    "symbol": symbol,
+                    "strike_price": K,
+                    "option_type": opt_type,
+                    "bid_price": bid_price,
+                    "ask_price": ask_price,
+                    "delta": calc_delta,
+                    "gamma": calc_gamma,
+                    "theta": calc_theta,
+                    "vega": calc_vega,
                     "implied_volatility": calc_iv,
                 })
 
             return pd.DataFrame(rows)
 
-        # Keep legacy method name for compatibility if needed elsewhere
+        # Legacy compatibility
         def get_spx_option_chain(self, expiration_date: str) -> pd.DataFrame:
-            return self.get_spy_option_chain(expiration_date)
+            return self.get_spy_option_chain(expiration_date, ticker="SPY")
 
 elif DATA_PROVIDER == "polygon":
     class DataClient:
         def __init__(self): raise NotImplementedError("Polygon stub")
-        def get_spy_bars(self, start, end): raise NotImplementedError
-        def get_spy_option_chain(self, expiration_date): raise NotImplementedError
+        def get_spy_bars(self, start, end, ticker="SPY"): raise NotImplementedError
+        def get_spy_option_chain(self, expiration_date, ticker="SPY"): raise NotImplementedError
 
 data_client = DataClient()
