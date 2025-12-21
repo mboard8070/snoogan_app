@@ -68,3 +68,5 @@ completed_trades.json
 data/knowledge/
 daily_pnl.json
 equity_history.json
+.Trash-1000/info/test_params.ipynb.trashinfovariables.env
+*.env
