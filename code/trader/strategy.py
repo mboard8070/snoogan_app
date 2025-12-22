@@ -1,4 +1,4 @@
-# code/trader/strategy.py – Complete 1-minute strategy with full bash logging + 30-delta trail logic
+# code/trader/strategy.py – Complete 1m strategy: bash logs from 8AM, entries only after 9:40AM
 import os
 from datetime import datetime, timedelta, time, date
 from zoneinfo import ZoneInfo
@@ -10,11 +10,11 @@ est = ZoneInfo("America/New_York")
 
 class TradingStrategy:
     def __init__(self):
-        self.positions = {}  # proxy_ticker: pos_dict
+        self.positions = {}
         self.equity_history = [float(os.getenv("STARTING_BALANCE", 100000))]
         self.daily_pnl = 0.0
         self.trades_today = []
-        self.daily_loss_limit = -0.03 * self.equity_history[-1]  # 3% nanny
+        self.daily_loss_limit = -0.03 * self.equity_history[-1]
 
     def is_trading_day(self):
         today = date.today()
@@ -28,15 +28,23 @@ class TradingStrategy:
         }
         return today not in holidays_2025
 
-    def is_market_open(self):
+    def is_scanning_active(self):
+        """Logs + data pulls from 8:00 AM"""
         if not self.is_trading_day():
             return False
         now = datetime.now(est).time()
-        return time(9, 30) <= now <= time(16, 0)
+        return time(8, 0) <= now <= time(16, 0)
+
+    def can_enter_trades(self):
+        """Actual entries only after 9:40 AM – safe liquidity"""
+        if not self.is_trading_day():
+            return False
+        now = datetime.now(est).time()
+        return time(9, 40) <= now <= time(16, 0)
 
     def check_daily_loss_nanny(self):
         if self.daily_pnl <= self.daily_loss_limit:
-            print("[NANNY] 3% daily loss hit – shutting down trading for today.")
+            print("[NANNY] 3% daily loss hit – no more trades today.")
             return False
         return True
 
@@ -49,8 +57,8 @@ class TradingStrategy:
         print(f" OPEN POSITIONS: {len(self.positions)}")
         print("---------------------------------------------")
 
-        if not self.is_market_open():
-            print(" Market closed or weekend – scanning paused.")
+        if not self.is_scanning_active():
+            print(" Outside 8AM-4PM window – full scanning paused.")
             print("=============================================")
             return
 
@@ -82,21 +90,25 @@ class TradingStrategy:
 
             if ticker not in self.positions:
                 if trend != "chop":
-                    print(f" [SIGNAL] {trend.upper()} on {ticker} – attempting 30-delta entry")
-                    self._attempt_entry(ticker, trend, chain, price)
+                    if self.can_enter_trades():
+                        print(f" [SIGNAL] {trend.upper()} on {ticker} – entering 30-delta spread")
+                        self._attempt_entry(ticker, trend, chain, price)
+                    else:
+                        print(f" [SIGNAL] {trend.upper()} on {ticker} @ {price:.2f} – waiting for 9:40AM liquidity")
             else:
-                print(f" [MONITOR] Monitoring {ticker} position")
-                self.manage_positions()  # Checks all positions every cycle
+                print(f" [MONITOR] Managing {ticker} position")
+
+        self.manage_positions()
 
         print("=============================================")
 
     def _attempt_entry(self, proxy, trend, chain, price):
-        # Placeholder – replace with your real 30-delta strike selection
         is_put = trend == "down"
         multiplier = 10 if proxy == "SPY" else (40 if proxy == "QQQ" else 5)
-        short_strike = int(round(price / 5) * 5) * multiplier  # dummy
+        # Placeholder strike logic – replace with your real 30-delta selection
+        short_strike = int(round(price / 5) * 5) * multiplier
         long_strike = short_strike - (50 * multiplier)
-        credit = 1.80  # dummy credit
+        credit = 1.80
         contracts = 1
 
         underlying = "SPX" if proxy == "SPY" else ("NDX" if proxy == "QQQ" else "RUT")
@@ -114,16 +126,14 @@ class TradingStrategy:
         self.trades_today.append("entry")
         send_entry(is_put=is_put, short=short_strike, long=long_strike,
                    credit=credit * contracts * 100, underlying=underlying)
-        print(f" ENTERED tiny 30-delta {underlying} spread")
+        print(f" ENTERED tiny 30-delta {underlying} {'PUT' if is_put else 'CALL'} spread")
 
     def manage_positions(self):
         now = datetime.now(est)
         for proxy, pos in list(self.positions.items()):
-            # Placeholder current spread value – replace with real mark
-            current_value = 0.90  # dummy
+            current_value = 0.90  # Replace with real mark-to-market
 
             unrealized_per = pos["credit"] - current_value
-            unrealized = unrealized_per * pos["contracts"] * 100
 
             if current_value < pos["best_value"]:
                 pos["best_value"] = current_value
@@ -136,13 +146,13 @@ class TradingStrategy:
                 realized = -1.1 * pos["credit"] * pos["contracts"] * 100
 
             elif now.time() >= time(16, 0):
-                realized = unrealized
+                realized = (pos["credit"] - current_value) * pos["contracts"] * 100
 
             elif unrealized_per >= 0.5 * pos["credit"]:
                 if not pos["trail_active"]:
                     pos["trail_active"] = True
                     pos["trail_level"] = pos["best_value"] * 1.10
-                    print(" 50% profit hit – 10% trailing stop activated")
+                    print(" 50% profit reached – 10% trailing stop activated")
 
                 if current_value >= pos["trail_level"]:
                     realized = (pos["trail_level"] - current_value) * pos["contracts"] * 100
