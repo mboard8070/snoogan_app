@@ -5,12 +5,12 @@ import os
 import requests
 from datetime import datetime, timedelta, time, date
 from zoneinfo import ZoneInfo
+from code.utils.pivot_calculator import get_pivots  # Added import for pivots
 
 # Configuration
 project_root = Path(__file__).parent
 env_path = project_root / "variables.env"
 load_dotenv(dotenv_path=env_path)
-
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
 def send_webhook(message: str):
@@ -31,6 +31,7 @@ SUMMARY_TIME = time(16, 5)
 
 # Flags to prevent duplicate messages
 GREETING_FLAG_FILE = project_root / ".greeting_sent_today"
+PIVOTS_FLAG_FILE = project_root / ".pivots_sent_today"  # Added for pivots
 EOD_FLAG_FILE = project_root / ".eod_summary_sent_today"
 
 def has_sent_flag(file_path):
@@ -45,6 +46,12 @@ def send_greeting():
     msg = "🚀 **SNOOGANS ONLINE**\n30-Delta Vertical Credit Spread Strategy engaged. Monitoring SPY / QQQ / IWM for trend alignment."
     send_webhook(msg)
     mark_flag_sent(GREETING_FLAG_FILE)
+
+def send_pivots():  # Added function to send pivots
+    if has_sent_flag(PIVOTS_FLAG_FILE): return
+    pivots_msg = get_pivots()
+    send_webhook(pivots_msg)
+    mark_flag_sent(PIVOTS_FLAG_FILE)
 
 def send_entry(is_put=True, short=0, long=0, credit=0.0, underlying="SPY"):
     typ = "PUT 🟢" if is_put else "CALL 🔴"
@@ -70,15 +77,16 @@ def send_eod_summary():
     now = datetime.now(est)
     if SUMMARY_TIME <= now.time() < time(17, 0):
         if has_sent_flag(EOD_FLAG_FILE): return
-       
+      
         entries = len([t for t in trades_today if t.get("type") == "entry"])
         if entries == 0:
             msg = "**END OF DAY**\nNo trades triggered today. Market conditions did not meet 30-delta strategy requirements."
         else:
             msg = f"**END OF DAY**\nTrading complete. Total trades initiated: {entries}. See Dashboard for full PnL."
-       
+      
         send_webhook(msg)
         mark_flag_sent(EOD_FLAG_FILE)
 
-# Run greeting on import
+# Run greeting and pivots on import
 send_greeting()
+send_pivots()  # Added call for pivots
