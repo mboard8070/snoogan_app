@@ -1,5 +1,5 @@
 import os, json, pytz, numpy as np, pandas as pd
-from datetime import time, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from scipy.stats import norm
 from code.data.data_client import data_client
@@ -7,6 +7,7 @@ from indicators import get_trend_signal
 from discord_bot import send_entry, send_exit
 
 EST = pytz.timezone('US/Eastern')
+
 STATE_FILE = Path(".current_position.json")
 COMPLETED_TRADES_FILE = Path("completed_trades.json")
 DAILY_PNL_FILE = Path("daily_pnl.json")
@@ -14,10 +15,16 @@ EQUITY_HISTORY_FILE = Path("equity_history.json")
 KNOWLEDGE_DIR = Path("data/knowledge")
 KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
 
+
 def get_approx_delta(S, K, T, r=0.04, sigma=0.20, option_type="call"):
-    if T <= 0: return 0.5
+    if T <= 0:
+        return 0.5 if option_type == "call" else -0.5
     d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
-    return norm.cdf(d1) if option_type == "call" else norm.cdf(d1) - 1
+    if option_type == "call":
+        return norm.cdf(d1)
+    else:
+        return norm.cdf(-d1)
+
 
 class TradingStrategy:
     def __init__(self):
@@ -29,6 +36,7 @@ class TradingStrategy:
         self.positions = self._load_state()
         self.completed_trades = self._load_completed_trades()
 
+    # Persistence helpers (unchanged from final version)
     def _load_state(self):
         if STATE_FILE.exists():
             try:
@@ -67,7 +75,7 @@ class TradingStrategy:
         batch_trades = self.completed_trades[start_idx:]
         with open(batch_file, 'w') as f:
             json.dump(batch_trades, f, indent=2)
-        print(f" [KNOWLEDGE] Dropped {len(batch_trades)} trades into {batch_file.name}")
+        print(f"[KNOWLEDGE] Dropped {len(batch_trades)} trades into {batch_file.name}")
 
     def _load_daily_pnl(self):
         today = datetime.now(EST).date().isoformat()
@@ -102,7 +110,6 @@ class TradingStrategy:
     def run_cycle(self):
         now = datetime.now(EST)
         tickers = ["SPY", "QQQ", "IWM"]
-
         print(f"=============================================")
         print(f" CYCLE: {now.strftime('%H:%M:%S')}")
         print(f" DAILY PnL (persistent): ${self.daily_pnl:+.2f} | LIMIT: -${(self.starting_balance * 0.03):.2f}")
@@ -134,7 +141,6 @@ class TradingStrategy:
 
     def _attempt_entry(self, trend, chain, underlying, price):
         print(f" [ENTRY ATTEMPT] {underlying} {trend.upper()} – scanning {len(chain)} options")
-
         direction = "put" if trend == "bull" else "call"
         target_chain = chain[chain['option_type'] == direction].copy()
         target_chain['delta'] = pd.to_numeric(target_chain['delta'], errors='coerce')
@@ -146,7 +152,9 @@ class TradingStrategy:
                 )
 
         target_chain['abs_delta'] = target_chain['delta'].abs()
-        sel = target_chain.iloc[(target_chain['abs_delta'] - 0.30).abs().argsort()[:1]]
+
+        TARGET_DELTA = 0.30
+        sel = target_chain.iloc[(target_chain['abs_delta'] - TARGET_DELTA).abs().argsort()[:1]]
 
         if sel.empty:
             print(f" [ENTRY SKIP] {underlying} – no ~30 delta strike found")
@@ -160,7 +168,7 @@ class TradingStrategy:
             print(f" [ENTRY SKIP] {underlying} – credit {c:.2f} < $0.20")
             return
 
-        print(f" [ENTRY] {underlying} {direction.upper()} {s}/{long_strike} @ {c:.2f}")
+        print(f" [ENTRY] {underlying} {direction.upper()} {s}/{long_strike} @ {c:.2f} credit – just sold another tiny spread, lunch money secured, snoochie boochies")
 
         pos = {
             'underlying': underlying,
@@ -174,9 +182,7 @@ class TradingStrategy:
         }
         self.positions[underlying] = pos
         self._update_state()
-
         self.executor.place_credit_spread(direction, s, long_strike, c)
-
         send_entry(
             is_put=(direction == "put"),
             short=s,
@@ -197,32 +203,29 @@ class TradingStrategy:
         cur = (row['bid_price'].values[0] + row['ask_price'].values[0]) / 2
         entry = p['entry_credit']
         profit_50pct_level = entry * 0.50
-
         status = "TRAILING ACTIVE" if p['trailing_active'] else "50% PROFIT TARGET"
+
         print(f" [MONITOR] {ticker} {p['side'].upper()} {p['short_strike']} | Entry: {entry:.2f} | Current: {cur:.2f} | Mode: {status}")
 
-        if cur >= entry * 1.50:
+        if cur >= entry * 2.0:
             self._close_and_clear(ticker, "STOP LOSS", cur)
             return
 
         if not p['trailing_active']:
             if cur <= profit_50pct_level:
-                print(f" [PROFIT] 50% hit on {ticker} — switching to 10% trailing")
+                print(f" [PROFIT] 50% captured on {ticker} — flipping to trailing mode")
                 p['trailing_active'] = True
                 p['best_credit'] = cur
                 self._update_state()
             return
 
         if cur < p['best_credit']:
-            old_stop = p['best_credit'] * 1.10
             p['best_credit'] = cur
-            new_stop = cur * 1.10
             self._update_state()
-            print(f" [TRAIL] {ticker} ratcheted to {new_stop:.2f}")
+            print(f" [TRAIL] {ticker} ratcheted – new stop @ {cur * 1.10:.2f}")
 
-        trail_stop_price = p['best_credit'] * 1.10
-        if cur >= trail_stop_price:
-            print(f" [TRAIL STOP] {ticker} hit — locking profits")
+        if cur >= p['best_credit'] * 1.10:
+            print(f" [TRAIL STOP] {ticker} triggered — locking in gains")
             self._close_and_clear(ticker, "TRAILING STOP (10%)", cur)
 
     def _close_and_clear(self, ticker, reason, debit):
@@ -249,10 +252,10 @@ class TradingStrategy:
             "reason": reason,
             "trailing_used": p.get('trailing_active', False)
         }
-
         self.completed_trades.append(trade_record)
         self._save_completed_trades()
-        print(f" [DIARY] {ticker} {reason} logged | PnL: ${pnl:+.2f}")
+
+        print(f" [DIARY] {ticker} {reason} | PnL: ${pnl:+.2f}")
 
         if len(self.completed_trades) % 30 == 0:
             self._batch_to_knowledge()
@@ -265,7 +268,7 @@ class TradingStrategy:
             pnl=pnl,
             underlying=p['underlying']
         )
-
         print(f" [EXIT] {ticker} {reason} | PnL: ${pnl:+.2f}")
+
         del self.positions[ticker]
         self._update_state()

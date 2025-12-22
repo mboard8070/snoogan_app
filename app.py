@@ -18,6 +18,7 @@ ENV_PATH = PROJECT_ROOT / "variables.env"
 load_dotenv(ENV_PATH)
 
 from strategy import TradingStrategy
+from strategy_15m import TradingStrategy15m  # <--- NEW IMPORT
 from snoogans_brain import SnoogansBrain
 from langchain_ollama import OllamaLLM
 from langchain_core.prompts import PromptTemplate
@@ -52,8 +53,11 @@ def get_snoogans_rant(question: str) -> str:
     return RAG_BRAIN.ask_general(question)
 
 # --- 4. DATA PERSISTENCE & HEADER ---
-if 'strategy' not in st.session_state:
-    st.session_state.strategy = TradingStrategy()
+if 'strategy_1m' not in st.session_state:
+    st.session_state.strategy_1m = TradingStrategy()
+
+if 'strategy_15m' not in st.session_state:
+    st.session_state.strategy_15m = TradingStrategy15m()
 
 # Load completed trades count for brain progress
 COMPLETED_TRADES_FILE = PROJECT_ROOT / "completed_trades.json"
@@ -70,9 +74,9 @@ if COMPLETED_TRADES_FILE.exists():
 progress = min(trade_count / BATCH_SIZE, 1.0)
 trades_till_batch = BATCH_SIZE - (trade_count % BATCH_SIZE)
 
-# Equity
+# Equity - both strategies share the exact same daily_pnl
 bal = float(os.getenv("STARTING_BALANCE", 100000))
-pnl = st.session_state.strategy.daily_pnl
+pnl = st.session_state.strategy_1m.daily_pnl
 current_eq = bal + pnl
 
 # Header metrics
@@ -85,24 +89,22 @@ with m3:
     if trades_till_batch == BATCH_SIZE:
         st.success("🍃 Fresh knowledge batch dropped – RAG brain gettin' fatter")
 m4.metric("Market", "🟢 OPEN" if dt_time(9,30) <= datetime.now().time() <= dt_time(16,0) else "🔴 CLOSED")
-
 st.divider()
 
 # --- 5. DASHBOARD GRID ---
 col_left, col_right = st.columns([1, 1], gap="medium")
-
 with col_left:
     st.subheader("Performance & Position")
     st.line_chart(
-        pd.Series(st.session_state.strategy.equity_history, name="Equity"),
+        pd.Series(st.session_state.strategy_1m.equity_history, name="Equity"),
         height=230
     )
-   
+  
     with st.container(border=True):
-        if st.session_state.strategy.positions:
+        if st.session_state.strategy_1m.positions:
             st.write("**Current Positions:**")
             pos_list = []
-            for ticker, p in st.session_state.strategy.positions.items():
+            for ticker, p in st.session_state.strategy_1m.positions.items():
                 row = p.copy()
                 row['ticker'] = ticker
                 pos_list.append(row)
@@ -112,16 +114,16 @@ with col_left:
 
 with col_right:
     t1, t2 = st.tabs(["💬 Snoogans Chat", "📜 Trading Logs"])
-   
+  
     with t1:
         chat_box = st.container(height=360)
         if "chat" not in st.session_state:
             st.session_state.chat = [{"role": "assistant", "content": "Router active. Standing by."}]
-       
+      
         with chat_box:
             for msg in st.session_state.chat:
                 with st.chat_message(msg["role"]): st.markdown(msg["content"])
-       
+      
         if prompt := st.chat_input("Ask Snoogans..."):
             st.session_state.chat.append({"role": "user", "content": prompt})
             with st.chat_message("assistant"):
@@ -132,19 +134,35 @@ with col_right:
 
     with t2:
         st.write(f"Last Heartbeat: {datetime.now().strftime('%H:%M:%S')}")
-        log_display = st.empty()
 
-# --- 6. BACKGROUND ENGINE ---
-@st.fragment(run_every=10)
-def sync_trading_cycle():
-    output_buffer = io.StringIO()
-   
-    with redirect_stdout(output_buffer):
-        try:
-            st.session_state.strategy.run_cycle()
-        except Exception as e:
-            print(f"Cycle Error: {e}")
-    
-    log_display.code(output_buffer.getvalue() or "Scanning...", language="bash", wrap_lines=True)
+        # === 1-MINUTE LOG PANE ===
+        st.subheader("🖥️ 1-Minute Snoogans Log")
+        log_display_1m = st.empty()
 
-sync_trading_cycle()
+        @st.fragment(run_every=12)
+        def sync_1m_cycle():
+            output_buffer = io.StringIO()
+            with redirect_stdout(output_buffer):
+                try:
+                    st.session_state.strategy_1m.run_cycle()
+                except Exception as e:
+                    print(f"[1m] Cycle Error: {e}")
+            log_display_1m.code(output_buffer.getvalue() or "Scanning...", language="bash", wrap_lines=True)
+
+        sync_1m_cycle()
+
+        # === 15-MINUTE LOG PANE ===
+        st.subheader("🖥️ 15-Minute Snoogans Log")
+        log_display_15m = st.empty()
+
+        @st.fragment(run_every=15)
+        def sync_15m_cycle():
+            output_buffer = io.StringIO()
+            with redirect_stdout(output_buffer):
+                try:
+                    st.session_state.strategy_15m.run_cycle()
+                except Exception as e:
+                    print(f"[15m] Cycle Error: {e}")
+            log_display_15m.code(output_buffer.getvalue() or "Scanning...", language="bash", wrap_lines=True)
+
+        sync_15m_cycle()

@@ -80,29 +80,33 @@ if DATA_PROVIDER == "alpaca":
             )
             bars = self.stock_client.get_stock_bars(request)
             df = bars.df
+
             if isinstance(df.index, pd.MultiIndex):
                 df = df.droplevel(0)
-            if df.index.tz is not None:
-                df = df.tz_localize(None)
+
+            if not isinstance(df.index, pd.DatetimeIndex):
+                print(f"[WARN] {ticker} bars returned non-DatetimeIndex – returning empty DataFrame")
+                return pd.DataFrame()
+
+            df.index = df.index.tz_convert('US/Eastern')
+
             return df
 
         def get_spy_option_chain(self, expiration_date: str, ticker: str = "SPY") -> pd.DataFrame:
-            """Fetches option chain for given ticker and calculates Greeks."""
             request = OptionChainRequest(
                 underlying_symbol=ticker,
                 expiration_date=expiration_date
             )
             chain_dict = self.option_client.get_option_chain(request)
-           
+
             if not chain_dict:
                 return pd.DataFrame()
 
-            # Get current underlying price
             try:
                 end_time = datetime.now()
                 start_time = end_time - timedelta(minutes=5)
                 current_bars = self.get_spy_bars(start_time, end_time, ticker=ticker)
-                S = current_bars['close'].iloc[-1]
+                S = current_bars['close'].iloc[-1] if not current_bars.empty else {"SPY": 680.0, "QQQ": 480.0, "IWM": 220.0}.get(ticker, 100.0)
             except Exception:
                 S = {"SPY": 680.0, "QQQ": 480.0, "IWM": 220.0}.get(ticker, 100.0)
 
@@ -112,14 +116,13 @@ if DATA_PROVIDER == "alpaca":
             T = max(((expiration_dt - now).total_seconds() / (365.25 * 24 * 3600)), 1e-6)
 
             rows = []
-            # Generic symbol pattern – works for SPY, QQQ, IWM
             symbol_pattern = re.compile(rf'{ticker}\d{{6}}([CP])(\d{{8}})')
 
             for symbol, snap in chain_dict.items():
                 m = symbol_pattern.search(symbol)
                 if not m:
                     continue
-               
+
                 opt_type = "call" if m.group(1) == "C" else "put"
                 K = float(m.group(2)) / 1000.0
                 bid_price = snap.latest_quote.bid_price if snap.latest_quote else None
@@ -152,7 +155,6 @@ if DATA_PROVIDER == "alpaca":
 
             return pd.DataFrame(rows)
 
-        # Legacy compatibility
         def get_spx_option_chain(self, expiration_date: str) -> pd.DataFrame:
             return self.get_spy_option_chain(expiration_date, ticker="SPY")
 
