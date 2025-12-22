@@ -24,6 +24,13 @@ from langchain_ollama import OllamaLLM
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
+# --- DISCORD NOTIFIER IMPORTS ---
+from discord_notifier import (
+    send_greeting_if_needed,
+    send_pivots_if_needed,
+    send_eod_if_needed
+)
+
 # --- 2. UI CONFIG & CSS ---
 st.set_page_config(page_title="Snoogans", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""
@@ -36,7 +43,9 @@ st.markdown("""
 
 # --- 3. BRAIN & ROUTER LOGIC ---
 @st.cache_resource
-def load_brain(): return SnoogansBrain(chunk_size=400, chunk_overlap=150)
+def load_brain(): 
+    return SnoogansBrain(chunk_size=400, chunk_overlap=150)
+
 RAG_BRAIN = load_brain()
 ROUTER_LLM = OllamaLLM(model="snoogans:latest", temperature=0.0, base_url="http://127.0.0.1:11434")
 router_prompt = PromptTemplate.from_template("Classify as 'MANIFESTO' or 'GENERAL'. Question: {question}\nAnswer:")
@@ -55,7 +64,6 @@ def get_snoogans_rant(question: str) -> str:
 # --- 4. DATA PERSISTENCE & HEADER ---
 if 'strategy_1m' not in st.session_state:
     st.session_state.strategy_1m = TradingStrategy()
-
 if 'strategy_15m' not in st.session_state:
     st.session_state.strategy_15m = TradingStrategy15m()
 
@@ -93,13 +101,14 @@ st.divider()
 
 # --- 5. DASHBOARD GRID ---
 col_left, col_right = st.columns([1, 1], gap="medium")
+
 with col_left:
     st.subheader("Performance & Position")
     st.line_chart(
         pd.Series(st.session_state.strategy_1m.equity_history, name="Equity"),
         height=230
     )
-  
+ 
     with st.container(border=True):
         if st.session_state.strategy_1m.positions:
             st.write("**Current Positions:**")
@@ -114,16 +123,17 @@ with col_left:
 
 with col_right:
     t1, t2 = st.tabs(["💬 Snoogans Chat", "📜 Trading Logs"])
-  
+ 
     with t1:
         chat_box = st.container(height=360)
         if "chat" not in st.session_state:
             st.session_state.chat = [{"role": "assistant", "content": "Router active. Standing by."}]
-      
+     
         with chat_box:
             for msg in st.session_state.chat:
-                with st.chat_message(msg["role"]): st.markdown(msg["content"])
-      
+                with st.chat_message(msg["role"]): 
+                    st.markdown(msg["content"])
+     
         if prompt := st.chat_input("Ask Snoogans..."):
             st.session_state.chat.append({"role": "user", "content": prompt})
             with st.chat_message("assistant"):
@@ -147,7 +157,15 @@ with col_right:
                     st.session_state.strategy_1m.run_cycle()
                 except Exception as e:
                     print(f"[1m] Cycle Error: {e}")
+            
             log_display_1m.code(output_buffer.getvalue() or "Scanning...", language="bash", wrap_lines=True)
+            
+            # Discord scheduled messages – fire every cycle but flagged so only once per day
+            send_greeting_if_needed()
+            send_pivots_if_needed()
+            # Assuming strategy_1m has a list of today's trades or you track it – adjust as needed
+            today_trades = len(getattr(st.session_state.strategy_1m, "trades_today", []))
+            send_eod_if_needed(today_trades)
 
         sync_1m_cycle()
 
@@ -163,6 +181,13 @@ with col_right:
                     st.session_state.strategy_15m.run_cycle()
                 except Exception as e:
                     print(f"[15m] Cycle Error: {e}")
+            
             log_display_15m.code(output_buffer.getvalue() or "Scanning...", language="bash", wrap_lines=True)
+            
+            # Same Discord checks for 15m cycle (redundant but harmless – flags prevent spam)
+            send_greeting_if_needed()
+            send_pivots_if_needed()
+            today_trades = len(getattr(st.session_state.strategy_15m, "trades_today", []))
+            send_eod_if_needed(today_trades)
 
         sync_15m_cycle()
