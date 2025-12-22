@@ -1,20 +1,69 @@
-# code/trader/strategy.py – Complete 1m strategy: bash logs from 8AM, entries only after 9:40AM
+# code/trader/strategy.py – 1-minute strategy with full persistence
 import os
+import json
+import pandas as pd
+from pathlib import Path
 from datetime import datetime, timedelta, time, date
 from zoneinfo import ZoneInfo
 from code.data.data_client import data_client
 from indicators import get_trend_signal
-from discord_notifier import send_entry, send_exit
+from discord_notifier import send_entry, send_exit, set_strategy_ready
 
 est = ZoneInfo("America/New_York")
+project_root = Path(__file__).parent.parent
+STATE_FILE = project_root / "strategy_state.json"
 
 class TradingStrategy:
     def __init__(self):
-        self.positions = {}
-        self.equity_history = [float(os.getenv("STARTING_BALANCE", 100000))]
-        self.daily_pnl = 0.0
-        self.trades_today = []
+        self._load_state()
         self.daily_loss_limit = -0.03 * self.equity_history[-1]
+        self._strategy_ready_sent = False
+        self.trades_today = []  # For EOD trade count
+
+    def _load_state(self):
+        """Load persisted state or initialise fresh."""
+        if STATE_FILE.exists():
+            with open(STATE_FILE, 'r') as f:
+                state = json.load(f)
+                self.positions = state.get('positions', {})
+                self.equity_history = state.get('equity_history', [float(os.getenv("STARTING_BALANCE", 100000))])
+                self.daily_pnl = state.get('daily_pnl', 0.0)
+                self.last_pnl_date = state.get('last_pnl_date', date.today().isoformat())
+                self.closed_trades = state.get('closed_trades', [])
+        else:
+            self.positions = {}
+            self.equity_history = [float(os.getenv("STARTING_BALANCE", 100000))]
+            self.daily_pnl = 0.0
+            self.last_pnl_date = date.today().isoformat()
+            self.closed_trades = []
+
+        # Reset daily PnL on new trading day
+        if self.last_pnl_date != date.today().isoformat():
+            self.daily_pnl = 0.0
+            self.last_pnl_date = date.today().isoformat()
+
+    def _save_state(self):
+        """Persist open positions, equity history, daily PnL and closed trades."""
+        state = {
+            'positions': self.positions,
+            'equity_history': self.equity_history,
+            'daily_pnl': self.daily_pnl,
+            'last_pnl_date': self.last_pnl_date,
+            'closed_trades': self.closed_trades
+        }
+        with open(STATE_FILE, 'w') as f:
+            json.dump(state, f, indent=4)
+
+    def _log_closed_trades_batch(self):
+        if len(self.closed_trades) >= 30:
+            timestamp = datetime.now(est).strftime("%Y%m%d_%H%M%S")
+            rag_folder = Path("/data/knowledge")  # Fixed path
+            rag_folder.mkdir(parents=True, exist_ok=True)
+            batch_file = rag_folder / f"trades_batch_1m_{timestamp}.json"
+            with open(batch_file, 'w') as f:
+                json.dump(self.closed_trades, f, indent=4)
+            print(f"Logged 30 closed trades to {batch_file.name}")
+            self.closed_trades = []
 
     def is_trading_day(self):
         today = date.today()
@@ -29,18 +78,16 @@ class TradingStrategy:
         return today not in holidays_2025
 
     def is_scanning_active(self):
-        """Logs + data pulls from 8:00 AM"""
         if not self.is_trading_day():
             return False
         now = datetime.now(est).time()
         return time(8, 0) <= now <= time(16, 0)
 
     def can_enter_trades(self):
-        """Actual entries only after 9:40 AM – safe liquidity"""
         if not self.is_trading_day():
             return False
         now = datetime.now(est).time()
-        return time(9, 40) <= now <= time(16, 0)
+        return time(9, 40) <= now < time(14, 30)
 
     def check_daily_loss_nanny(self):
         if self.daily_pnl <= self.daily_loss_limit:
@@ -53,12 +100,12 @@ class TradingStrategy:
         tickers = ["SPY", "QQQ", "IWM"]
         print("=============================================")
         print(f" CYCLE: {now.strftime('%H:%M:%S')}")
-        print(f" DAILY PnL (persistent): ${self.daily_pnl:+.2f} | LIMIT: -${-self.daily_loss_limit:.2f}")
+        print(f" DAILY PnL: ${self.daily_pnl:+.2f} | LIMIT: -${-self.daily_loss_limit:.2f}")
         print(f" OPEN POSITIONS: {len(self.positions)}")
         print("---------------------------------------------")
 
         if not self.is_scanning_active():
-            print(" Outside 8AM-4PM window – full scanning paused.")
+            print(" Outside 8AM-4PM window – scanning paused.")
             print("=============================================")
             return
 
@@ -66,54 +113,94 @@ class TradingStrategy:
             print("=============================================")
             return
 
+        if not self._strategy_ready_sent:
+            set_strategy_ready()
+            self._strategy_ready_sent = True
+
         for ticker in tickers:
             minute_bars = data_client.get_spy_bars(
                 now - timedelta(days=7), now, ticker=ticker
             )
-            if minute_bars is None or minute_bars.empty:
-                print(f" [DATA SKIP] {ticker} - no minute bars")
-                continue
-
-            if len(minute_bars) < 20:
-                print(f" [DATA SKIP] {ticker} - not enough bars")
+            if minute_bars is None or minute_bars.empty or len(minute_bars) < 20:
+                print(f" [DATA SKIP] {ticker} - insufficient bars")
                 continue
 
             trend = get_trend_signal(minute_bars, None, None)
             price = minute_bars['close'].iloc[-1]
-            chain = data_client.get_spy_option_chain(now.strftime("%Y-%m-%d"), ticker=ticker)
 
+            chain = data_client.get_spy_option_chain(now.strftime("%Y-%m-%d"), ticker=ticker)
             if chain is None or chain.empty:
-                print(f" [DATA SKIP] {ticker} - option chain empty")
+                print(f" [DATA SKIP] {ticker} - empty option chain")
                 continue
 
             print(f" [{ticker}] Price: {price:.2f} | Trend: {trend.upper()}")
 
             if ticker not in self.positions:
-                if trend != "chop":
-                    if self.can_enter_trades():
-                        print(f" [SIGNAL] {trend.upper()} on {ticker} – entering 30-delta spread")
-                        self._attempt_entry(ticker, trend, chain, price)
-                    else:
-                        print(f" [SIGNAL] {trend.upper()} on {ticker} @ {price:.2f} – waiting for 9:40AM liquidity")
+                if trend != "chop" and self.can_enter_trades():
+                    self._attempt_entry(ticker, trend, chain, price)
             else:
                 print(f" [MONITOR] Managing {ticker} position")
 
         self.manage_positions()
-
+        self._save_state()
+        self._log_closed_trades_batch()
         print("=============================================")
 
-    def _attempt_entry(self, proxy, trend, chain, price):
-        is_put = trend == "down"
-        multiplier = 10 if proxy == "SPY" else (40 if proxy == "QQQ" else 5)
-        # Placeholder strike logic – replace with your real 30-delta selection
-        short_strike = int(round(price / 5) * 5) * multiplier
-        long_strike = short_strike - (50 * multiplier)
-        credit = 1.80
+    def _get_spread_price(self, chain, short_contract, long_contract):
+        short_bid = short_contract['bid']
+        short_ask = short_contract['ask']
+        long_bid = long_contract['bid']
+        long_ask = long_contract['ask']
+
+        if short_bid == 0 or long_ask == 0:
+            return None
+        credit = short_bid - long_ask
+        if credit < 0.20:
+            return None
+        return round((short_bid + short_ask)/2 - (long_bid + long_ask)/2, 2)
+
+    def _attempt_entry(self, ticker, trend, chain, price):
+        is_put = trend == "up"
+
+        type_col = None
+        for col in ['type', 'contract_type', 'option_type', 'right', 'call_put']:
+            if col in chain.columns:
+                type_col = col
+                break
+        if type_col is None:
+            print(f" [{ticker}] No recognized call/put column in chain – skipping entry")
+            return
+
+        target_type = 'put' if is_put else 'call'
+        opts = chain[chain[type_col].str.lower() == target_type].copy()
+
+        opts['delta'] = pd.to_numeric(opts['delta'], errors='coerce')
+        if opts['delta'].isna().all():
+            print(f" [{ticker}] No valid deltas in chain – skipping entry")
+            return
+
+        opts['delta_abs'] = opts['delta'].abs()
+
+        target = opts.iloc[(opts['delta_abs'] - 0.30).abs().argsort()[:1]]
+        if target.empty:
+            return
+        short_strike = float(target['strike'].values[0])
+        short_contract = target.iloc[0].to_dict()
+
+        long_strike = short_strike - 5 if is_put else short_strike + 5
+        long_row = chain[(chain['strike'] == long_strike) & (chain[type_col].str.lower() == target_type)]
+        if long_row.empty:
+            return
+        long_contract = long_row.iloc[0].to_dict()
+
+        credit = self._get_spread_price(chain, short_contract, long_contract)
+        if credit is None:
+            print(f" [{ticker}] Spread credit < $0.20 or illiquid – skipping")
+            return
+
         contracts = 1
 
-        underlying = "SPX" if proxy == "SPY" else ("NDX" if proxy == "QQQ" else "RUT")
-
-        self.positions[proxy] = {
+        self.positions[ticker] = {
             "is_put": is_put,
             "short": short_strike,
             "long": long_strike,
@@ -121,52 +208,104 @@ class TradingStrategy:
             "contracts": contracts,
             "best_value": credit,
             "trail_active": False,
-            "trail_level": None
+            "trail_level": None,
+            "entry_time": datetime.now(est).isoformat()
         }
+
         self.trades_today.append("entry")
-        send_entry(is_put=is_put, short=short_strike, long=long_strike,
-                   credit=credit * contracts * 100, underlying=underlying)
-        print(f" ENTERED tiny 30-delta {underlying} {'PUT' if is_put else 'CALL'} spread")
+        send_entry(
+            is_put=is_put,
+            short=short_strike,
+            long=long_strike,
+            credit=credit * contracts * 100,
+            underlying=ticker
+        )
+        print(f" [ENTRY] {ticker} {'PUT' if is_put else 'CALL'} {short_strike:.1f} | "
+              f"Entry: {credit:.2f}")
+
+    def _get_current_mark(self, ticker, pos):
+        now = datetime.now(est)
+        chain = data_client.get_spy_option_chain(now.strftime("%Y-%m-%d"), ticker=ticker)
+        if chain is None or chain.empty:
+            return None
+
+        type_col = None
+        for col in ['type', 'contract_type', 'option_type', 'right', 'call_put']:
+            if col in chain.columns:
+                type_col = col
+                break
+        if type_col is None:
+            return None
+
+        target_type = 'put' if pos["is_put"] else 'call'
+        short_row = chain[(chain['strike'] == pos["short"]) & (chain[type_col].str.lower() == target_type)]
+        long_row = chain[(chain['strike'] == pos["long"]) & (chain[type_col].str.lower() == target_type)]
+        if short_row.empty or long_row.empty:
+            return None
+
+        short_contract = short_row.iloc[0].to_dict()
+        long_contract = long_row.iloc[0].to_dict()
+        return self._get_spread_price(chain, short_contract, long_contract)
 
     def manage_positions(self):
         now = datetime.now(est)
-        for proxy, pos in list(self.positions.items()):
-            current_value = 0.90  # Replace with real mark-to-market
+        for ticker, pos in list(self.positions.items()):
+            current_value = self._get_current_mark(ticker, pos)
+            if current_value is None:
+                print(f" [{ticker}] Unable to fetch live mark – skipping management this cycle")
+                continue
 
-            unrealized_per = pos["credit"] - current_value
+            print(f" [MONITOR] {ticker} {'PUT' if pos['is_put'] else 'CALL'} {pos['short']:.1f} | "
+                  f"Entry: {pos['credit']:.2f} | Current: {current_value:.2f}")
 
             if current_value < pos["best_value"]:
                 pos["best_value"] = current_value
-                if pos["trail_active"]:
-                    pos["trail_level"] = current_value * 1.10
 
             realized = None
+            credit = pos["credit"]
 
-            if current_value >= 2.1 * pos["credit"]:
-                realized = -1.1 * pos["credit"] * pos["contracts"] * 100
+            if current_value >= credit:
+                realized = -credit * pos["contracts"] * 100
 
-            elif now.time() >= time(16, 0):
-                realized = (pos["credit"] - current_value) * pos["contracts"] * 100
+            elif now.time() >= time(14, 30):
+                realized = (credit - current_value) * pos["contracts"] * 100
 
-            elif unrealized_per >= 0.5 * pos["credit"]:
+            elif (credit - current_value) >= 0.5 * credit:
                 if not pos["trail_active"]:
                     pos["trail_active"] = True
                     pos["trail_level"] = pos["best_value"] * 1.10
-                    print(" 50% profit reached – 10% trailing stop activated")
-
+                    print(f" [{ticker}] 50% profit hit – 10% trailing stop activated @ {pos['trail_level']:.2f}")
                 if current_value >= pos["trail_level"]:
                     realized = (pos["trail_level"] - current_value) * pos["contracts"] * 100
 
             if realized is not None:
-                self.exit_position(proxy, pos, realized)
+                self.exit_position(ticker, pos, realized, current_value)
 
-    def exit_position(self, proxy, pos, realized_pnl):
+    def exit_position(self, ticker, pos, realized_pnl, final_mark):
         self.daily_pnl += realized_pnl
         self.equity_history.append(self.equity_history[-1] + realized_pnl)
-        underlying = "SPX" if proxy == "SPY" else ("NDX" if proxy == "QQQ" else "RUT")
-        trail_note = " (trail hit)" if pos.get("trail_active") else ""
-        send_exit(is_put=pos["is_put"], short=pos["short"], long=pos["long"],
-                  credit=pos["credit"], pnl=realized_pnl, underlying=underlying)
-        print(f" EXITED {underlying} spread{trail_note} – P/L ${realized_pnl:+.2f}")
-        del self.positions[proxy]
+
+        send_exit(
+            is_put=pos["is_put"],
+            short=pos["short"],
+            long=pos["long"],
+            credit=pos["credit"],
+            pnl=realized_pnl,
+            underlying=ticker
+        )
+        print(f" EXITED {ticker} spread – P/L ${realized_pnl:+.2f} (mark ${final_mark:.2f})")
+
+        closed_trade = {
+            "ticker": ticker,
+            "is_put": pos["is_put"],
+            "short": pos["short"],
+            "long": pos["long"],
+            "credit": pos["credit"],
+            "pnl": realized_pnl,
+            "entry_time": pos.get("entry_time", "unknown"),
+            "exit_time": datetime.now(est).isoformat()
+        }
+        self.closed_trades.append(closed_trade)
+
+        del self.positions[ticker]
         self.trades_today.append("exit")

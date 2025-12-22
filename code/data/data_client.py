@@ -80,16 +80,21 @@ if DATA_PROVIDER == "alpaca":
             )
             bars = self.stock_client.get_stock_bars(request)
             df = bars.df
-
+            if df.empty:
+                print(f"[DATA] No bars returned for {ticker}")
+                return df
+            
+            # Handle MultiIndex (symbol + timestamp) – common even for single ticker
             if isinstance(df.index, pd.MultiIndex):
-                df = df.droplevel(0)
-
-            if not isinstance(df.index, pd.DatetimeIndex):
-                print(f"[WARN] {ticker} bars returned non-DatetimeIndex – returning empty DataFrame")
-                return pd.DataFrame()
-
-            df.index = df.index.tz_convert('US/Eastern')
-
+                df = df.droplevel(0)  # Remove symbol level
+            
+            # Ensure proper DatetimeIndex in EST
+            df.index = pd.to_datetime(df.index)  # Force conversion if needed
+            df = df.tz_convert('America/New_York') if df.index.tz is not None else df.index.tz_localize('America/New_York')
+            
+            # Sort just in case
+            df = df.sort_index()
+            
             return df
 
         def get_spy_option_chain(self, expiration_date: str, ticker: str = "SPY") -> pd.DataFrame:
