@@ -1,13 +1,13 @@
-# Workbench generated files
+# === Workbench generated files ===
 .project/*
 !.project/spec.yaml
 !.project/configpacks
 
-# macOS / OS junk
+# === macOS / OS junk ===
 .DS_Store
 Thumbs.db
 
-# Editor / IDE
+# === Editor / IDE ===
 .vscode/
 .idea/
 *.swp
@@ -15,7 +15,7 @@ Thumbs.db
 *.sublime-workspace
 *.sublime-project
 
-# Python / venv
+# === Python / venv ===
 __pycache__/
 *.py[cod]
 *$py.class
@@ -25,24 +25,29 @@ env/
 .venv/
 ENV/
 
-# Streamlit specific
+# === Streamlit specific ===
 .streamlit/
 streamlit_config.toml
 .streamlit/secrets.toml
 
-# Environment & secrets (CRITICAL — never commit)
+
+# Vector DB – local embeddings for the RAG brain (never commit)
+data/vector_db/
+!data/vector_db/.gitkeep  # Optional: keep folder tracked empty if you want
+# === Environment & secrets (CRITICAL — never commit) ===
 .env
+variables.env
 *.key
 *.pem
 secrets/
 config/*.key
 
-# Logs & runtime
+# === Logs & runtime ===
 *.log
 nohup.out
 dashboard.log
 
-# Data / temp files
+# === Data / temp files ===
 *.csv
 *.pkl
 *.sqlite3
@@ -50,25 +55,42 @@ dashboard.log
 trade_history.csv
 logs/
 
-# Local scripts
+# === Local scripts ===
 *.sh
 start-dashboard.sh
 stop-dashboard.sh
 
-# Jupyter
+# === Jupyter ===
 .ipynb_checkpoints/
 *.ipynb
 
-# Misc
+# === Misc ===
 *.bak
 *.tmp
 
-completed_trades.json
+# === SNOOGANS APP SPECIFIC ===
+
+# Strategy persistence & state files (contain live positions, PnL, equity history)
+strategy_state.json
+strategy_15m_state.json
+positions.json
+positions_15m.json
 .current_position.json
-data/knowledge/
 daily_pnl.json
 equity_history.json
-.Trash-1000/info/test_params.ipynb.trashinfovariables.env
-*.env
+completed_trades.json
+
+# Discord daily flag files (temporary, reset each day)
+.greeting_sent_today
+.pivots_sent_today
+.eod_summary_sent_today
+
+# RAG knowledge directory – contains all closed trade batches for the AI
+# (We keep the folder itself in repo if needed, but never the contents)
+data/knowledge/
+!data/knowledge/.gitkeep  # Optional: add a .gitkeep if you want an empty folder tracked
+
+# End of .gitignore
 .Trash-1000/info/test_params.ipynb.trashinfo
 .Trash-1000/info/Untitled.ipynb.trashinfo
+data/vector_db/fe0b045e-77cb-4240-8550-c1ae03f86a3a/length.bin
