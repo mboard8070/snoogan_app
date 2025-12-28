@@ -249,7 +249,7 @@ class TradingStrategy15m:
             return
         short_delta_target = -0.30 if is_put else 0.30
         long_delta_target = -0.15 if is_put else 0.15
-        delta_tolerance = 0.05
+        delta_tolerance = 0.15
         short_candidates = opts[abs(opts['delta'] - short_delta_target) <= delta_tolerance]
         if short_candidates.empty:
             print(f"{self.prefix} [{ticker}] No short legs near {short_delta_target:.2f} delta – skipping entry")

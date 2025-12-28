@@ -11,13 +11,34 @@ load_dotenv()
 ALPACA_API_KEY = os.getenv("ALPACA_API_KEY")
 ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
 
+# Holiday list from strategy.py – no tradin' on these, ya bum
+holidays_2025 = {
+    date(2025, 1, 1), date(2025, 1, 20), date(2025, 2, 17),
+    date(2025, 4, 18), date(2025, 5, 26), date(2025, 6, 19),
+    date(2025, 7, 4), date(2025, 9, 1), date(2025, 11, 27),
+    date(2025, 12, 25)
+}
+
+def is_trading_day(day):
+    if day.weekday() >= 5:  # Weekends out
+        return False
+    return day not in holidays_2025
+
+def get_previous_trading_day(today):
+    prev = today - timedelta(days=1)
+    while not is_trading_day(prev):
+        prev -= timedelta(days=1)
+    return prev
+
 def get_pivots():
     if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
         return "**SNOOGANS' DAILY PIVOTS — 8:30 AM EST**\n\nData unavailable — check your Alpaca keys, ya slacker.\nTrade above R1, fade below S1 — lunch money secured. 37."
-
+    
     client = StockHistoricalDataClient(ALPACA_API_KEY, ALPACA_SECRET_KEY)
     est = ZoneInfo("America/New_York")
     today = datetime.now(est).date()
+    prev_day = get_previous_trading_day(today)
+    
     symbols = [
         {"ticker": "SPY", "name": "SPX", "multi": 10},
         {"ticker": "QQQ", "name": "NDX", "multi": 40}
@@ -32,20 +53,25 @@ def get_pivots():
             request = StockBarsRequest(
                 symbol_or_symbols=symbol,
                 timeframe=TimeFrame.Day,
-                start=today - timedelta(days=10),
-                limit=3
+                start=prev_day - timedelta(days=5),  # Buffer for safety
+                end=today,  # Up to but not including partial today
+                limit=None  # Get all in range – no skimpy limits
             )
             bars = client.get_stock_bars(request)
             bars_list = bars[symbol]
-            if len(bars_list) < 2:
-                raise Exception("Not enough data")
+            if not bars_list:
+                raise Exception("No bars fetched")
             
-            last_bar = bars_list[-1]
-            last_ts = last_bar.timestamp.astimezone(est).date()
-            if last_ts == today:
-                yesterday_bar = bars_list[-2]
-            else:
-                yesterday_bar = last_bar
+            # Find the bar for prev_day (most recent complete)
+            yesterday_bar = None
+            for bar in reversed(bars_list):  # Newest first
+                bar_date = bar.timestamp.astimezone(est).date()
+                if bar_date == prev_day:
+                    yesterday_bar = bar
+                    break
+            
+            if yesterday_bar is None:
+                raise Exception("No bar for previous trading day")
             
             h = yesterday_bar.high * multi
             l = yesterday_bar.low * multi

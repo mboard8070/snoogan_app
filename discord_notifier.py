@@ -96,6 +96,7 @@ def force_send_pivots():
         send_webhook(pivots_msg)
         print("[DISCORD] Forced pivots sent.")
 
+# --- ORIGINAL CREDIT SPREAD FUNCTIONS (unchanged) ---
 def send_entry(is_put: bool = True, short: float = 0.0, long: float = 0.0, credit: float = 0.0, underlying: str = "SPY"):
     if not is_ready():
         print(f"[BLOCKED PREMATURE ENTRY] Not ready yet: {underlying} {short:.2f}/{long:.2f}")
@@ -121,6 +122,41 @@ def send_exit(is_put: bool = True, short: float = 0.0, long: float = 0.0, credit
     reason = " (trail hit)" if (pnl >= 0.5 * credit and pnl < credit) else ""
     msg = (f"**EXIT {status}{reason} – {underlying}**\n"
            f"Strikes: {short:.2f}/{long:.2f} | P/L: ${pnl:+.2f}")
+    send_webhook(msg)
+
+# --- NEW SCALP OPTION FUNCTIONS ---
+def send_scalp_entry(is_call: bool = True, strike: float = 0.0, debit: float = 0.0, underlying: str = "SPY"):
+    """
+    Sends Discord notification for scalp strategy entry (single ATM option purchase).
+    Called from scalp_strategy.py with strategy="scalp" flag (optional).
+    """
+    if not is_ready():
+        print(f"[BLOCKED PREMATURE SCALP ENTRY] Not ready yet: {underlying} {strike:.2f}")
+        return
+    if strike == 0.0 or debit <= 0:
+        print(f"[BLOCKED INVALID SCALP ENTRY] {underlying} {strike:.2f} @ {debit}")
+        return
+    typ = "CALL" if is_call else "PUT"
+    direction = "🟢" if is_call else "🔴"
+    msg = (f"**SCALP ENTRY – {underlying} ATM {typ}** {direction}\n"
+           f"Strike: {strike:.2f} | Debit paid: ${debit:.2f}\n"
+           f"Management: Exit on chop signal, full loss, 50% profit (then 10% trail), or 2:30 PM EST cutoff.")
+    send_webhook(msg)
+
+def send_scalp_exit(is_call: bool = True, strike: float = 0.0, debit: float = 0.0, pnl: float = 0.0, underlying: str = "SPY"):
+    """
+    Sends Discord notification for scalp strategy exit.
+    """
+    if not is_ready():
+        print(f"[BLOCKED PREMATURE SCALP EXIT] Not ready yet: {underlying} {strike:.2f}")
+        return
+    if strike == 0.0:
+        print(f"[BLOCKED INVALID SCALP EXIT] {underlying} {strike:.2f}")
+        return
+    status = "WIN ✅" if pnl > 0 else "LOSS ❌"
+    trail_note = " (trail hit)" if (pnl >= 0.5 * debit * 100 and pnl < debit * 100) else ""
+    msg = (f"**SCALP EXIT {status}{trail_note} – {underlying}**\n"
+           f"Strike: {strike:.2f} | P/L: ${pnl:+.2f}")
     send_webhook(msg)
 
 def send_eod_if_needed(trade_count_today: int = 0):
