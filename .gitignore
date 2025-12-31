@@ -30,7 +30,6 @@ ENV/
 streamlit_config.toml
 .streamlit/secrets.toml
 
-
 # Vector DB – local embeddings for the RAG brain (never commit)
 data/vector_db/
 !data/vector_db/.gitkeep  # Optional: keep folder tracked empty if you want
@@ -94,3 +93,57 @@ data/knowledge/
 .Trash-1000/info/test_params.ipynb.trashinfo
 .Trash-1000/info/Untitled.ipynb.trashinfo
 data/vector_db/fe0b045e-77cb-4240-8550-c1ae03f86a3a/length.bin
+
+# Ignore generated or temporary files managed by the Workbench
+
+# General ignores
+
+# Byte-compiled / optimized / DLL files
+
+# Temp directories, notebooks created by jupyterlab
+.ipynb_checkpoints
+.Trash-*/
+.jupyter/
+.local/
+
+# Python distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Workbench Project Layout
+data/scratch/*
+!data/scratch/.gitkeep
+code/data/knowledge/trades.json
+code/scalp_strategy_state.json
+code/trader/scalp_strategy_state.json

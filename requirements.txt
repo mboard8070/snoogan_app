@@ -23,3 +23,5 @@ polygon-api-client
 alpaca-py
 scipy
 streamlit
+fastapi
+uvicorn[standard]

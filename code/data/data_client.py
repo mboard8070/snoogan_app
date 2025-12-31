@@ -1,21 +1,28 @@
-# data_client.py – Multi-ticker support (SPY, QQQ, IWM)
+# code/data/data_client.py
+# ── ENVIRONMENT LOADING – MUST BE FIRST ──
+from pathlib import Path
 from dotenv import load_dotenv
 import os
-import pandas as pd
-from datetime import datetime, timedelta
-import re
-import numpy as np
-from scipy.stats import norm
-from scipy.optimize import brentq
 
-load_dotenv()
+# Load variables.env from project root (same as Streamlit does)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent  # data → code → project root
+load_dotenv(PROJECT_ROOT / "variables.env")
 
+# Now safe to read environment variables
 DATA_PROVIDER = os.getenv("DATA_PROVIDER", "alpaca")
 ALPACA_API_KEY = os.getenv("ALPACA_API_KEY")
 ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
 MODE = os.getenv("MODE", "internal")
 STARTING_BALANCE = float(os.getenv("STARTING_BALANCE", "100000"))
 CONTRACT_SIZE = int(os.getenv("CONTRACT_SIZE", "1"))
+
+# --- Standard imports ---
+import pandas as pd
+from datetime import datetime, timedelta
+import re
+import numpy as np
+from scipy.stats import norm
+from scipy.optimize import brentq
 
 # --- Black-Scholes Model Functions ---
 def black_scholes_price(S, K, T, r, sigma, option_type):
@@ -54,6 +61,7 @@ def calculate_greeks(S, K, T, r, IV, option_type):
         theta = (-S * norm.pdf(d1) * IV / (2 * np.sqrt(T)) + r * K * np.exp(-r * T) * norm.cdf(-d2)) / 365
     return delta, gamma, theta, vega
 
+# --- DataClient Class ---
 if DATA_PROVIDER == "alpaca":
     from alpaca.data.historical.stock import StockHistoricalDataClient
     from alpaca.data.historical.option import OptionHistoricalDataClient
@@ -83,18 +91,18 @@ if DATA_PROVIDER == "alpaca":
             if df.empty:
                 print(f"[DATA] No bars returned for {ticker}")
                 return df
-            
+           
             # Handle MultiIndex (symbol + timestamp) – common even for single ticker
             if isinstance(df.index, pd.MultiIndex):
                 df = df.droplevel(0)  # Remove symbol level
-            
+           
             # Ensure proper DatetimeIndex in EST
-            df.index = pd.to_datetime(df.index)  # Force conversion if needed
+            df.index = pd.to_datetime(df.index)
             df = df.tz_convert('America/New_York') if df.index.tz is not None else df.index.tz_localize('America/New_York')
-            
+           
             # Sort just in case
             df = df.sort_index()
-            
+           
             return df
 
         def get_spy_option_chain(self, expiration_date: str, ticker: str = "SPY") -> pd.DataFrame:
@@ -103,10 +111,8 @@ if DATA_PROVIDER == "alpaca":
                 expiration_date=expiration_date
             )
             chain_dict = self.option_client.get_option_chain(request)
-
             if not chain_dict:
                 return pd.DataFrame()
-
             try:
                 end_time = datetime.now()
                 start_time = end_time - timedelta(minutes=5)
@@ -114,20 +120,16 @@ if DATA_PROVIDER == "alpaca":
                 S = current_bars['close'].iloc[-1] if not current_bars.empty else {"SPY": 680.0, "QQQ": 480.0, "IWM": 220.0}.get(ticker, 100.0)
             except Exception:
                 S = {"SPY": 680.0, "QQQ": 480.0, "IWM": 220.0}.get(ticker, 100.0)
-
             r = 0.04
             now = datetime.now()
             expiration_dt = datetime.strptime(expiration_date, "%Y-%m-%d")
             T = max(((expiration_dt - now).total_seconds() / (365.25 * 24 * 3600)), 1e-6)
-
             rows = []
             symbol_pattern = re.compile(rf'{ticker}\d{{6}}([CP])(\d{{8}})')
-
             for symbol, snap in chain_dict.items():
                 m = symbol_pattern.search(symbol)
                 if not m:
                     continue
-
                 opt_type = "call" if m.group(1) == "C" else "put"
                 K = float(m.group(2)) / 1000.0
                 bid_price = snap.latest_quote.bid_price if snap.latest_quote else None
@@ -137,14 +139,12 @@ if DATA_PROVIDER == "alpaca":
                 calc_gamma = snap.greeks.gamma if snap.greeks else None
                 calc_theta = snap.greeks.theta if snap.greeks else None
                 calc_vega = snap.greeks.vega if snap.greeks else None
-
                 if (calc_iv is None or calc_delta is None) and bid_price and ask_price and bid_price > 0:
                     mid_price = (bid_price + ask_price) / 2
                     calculated_iv = calculate_implied_volatility(mid_price, S, K, T, r, opt_type)
                     if calculated_iv is not None:
                         calc_iv = calculated_iv
                         calc_delta, calc_gamma, calc_theta, calc_vega = calculate_greeks(S, K, T, r, calculated_iv, opt_type)
-
                 rows.append({
                     "symbol": symbol,
                     "strike_price": K,
@@ -157,7 +157,6 @@ if DATA_PROVIDER == "alpaca":
                     "vega": calc_vega,
                     "implied_volatility": calc_iv,
                 })
-
             return pd.DataFrame(rows)
 
         def get_spx_option_chain(self, expiration_date: str) -> pd.DataFrame:
@@ -169,4 +168,15 @@ elif DATA_PROVIDER == "polygon":
         def get_spy_bars(self, start, end, ticker="SPY"): raise NotImplementedError
         def get_spy_option_chain(self, expiration_date, ticker="SPY"): raise NotImplementedError
 
-data_client = DataClient()
+# ── LAZY SINGLETON ──
+_instance = None
+
+def get_data_client():
+    """Return the singleton DataClient instance, creating it only on first call."""
+    global _instance
+    if _instance is None:
+        _instance = DataClient()
+    return _instance
+
+# Compatibility for existing code — keeps "from ... import data_client" working
+data_client = get_data_client()
