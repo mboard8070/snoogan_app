@@ -147,3 +147,4 @@ data/scratch/*
 code/data/knowledge/trades.json
 code/scalp_strategy_state.json
 code/trader/scalp_strategy_state.json
+data/esbuild
