@@ -476,7 +476,7 @@ class TradingStrategy:
         best_credit, best_short, best_long = max(candidates, key=lambda x: x[0])
         short_strike = float(best_short[strike_col])
         long_strike = float(best_long[strike_col])
-        contracts = 1
+        contracts = 10
 
         # Store position with market context for learning
         self.positions[ticker] = {

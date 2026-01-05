@@ -16,7 +16,7 @@ from typing import Optional, Dict, Any, Tuple
 
 # Import your existing modules
 from code.data.data_client import data_client
-from indicators import get_trend_signal, _macd
+from indicators import get_trend_signal, _macd, _rsi
 from discord_notifier import send_scalp_entry, send_scalp_exit, set_strategy_ready, send_webhook
 
 # Import brain for trade decisions (optional - fails gracefully)
@@ -56,22 +56,6 @@ NYSE_HOLIDAYS = {
     date(2026, 5, 25), date(2026, 6, 19), date(2026, 7, 3), date(2026, 9, 7),
     date(2026, 11, 26), date(2026, 12, 25)
 }
-
-
-def _rsi(series: pd.Series, period: int = 14) -> pd.Series:
-    """Calculate RSI indicator"""
-    try:
-        delta = series.diff(1)
-        gain = delta.where(delta > 0, 0)
-        loss = -delta.where(delta < 0, 0)
-        avg_gain = gain.rolling(window=period, min_periods=1).mean()
-        avg_loss = loss.rolling(window=period, min_periods=1).mean()
-        rs = avg_gain / avg_loss
-        rsi = 100 - (100 / (1 + rs))
-        return rsi
-    except Exception as e:
-        logger.error(f"Error calculating RSI: {e}")
-        return pd.Series([50] * len(series), index=series.index)
 
 
 class ScalpStrategy:
@@ -537,7 +521,7 @@ class ScalpStrategy:
                 return
 
             strike_price = float(row[strike_col])
-            contracts = 1
+            contracts = 10
 
             # Store position with market context for learning
             self.positions[ticker] = {
@@ -618,114 +602,145 @@ class ScalpStrategy:
                 logger.error(f"{self.prefix} Error managing {ticker}: {e}", exc_info=True)
 
     def _manage_single_position(self, ticker: str, pos: Dict, now: datetime):
-        """Manage a single scalp position"""
-        
-        # Get current trend
+        """Manage a single scalp position with tight exit logic"""
+
+        # Get current bars for trend and momentum
         bars = self._cached_fetch(
             ('bars', ticker),
             lambda: data_client.get_spy_bars(now - timedelta(days=7), now, ticker=ticker),
             ttl=10
         )
-        
+
         if bars is None or bars.empty or len(bars) < 20:
             return
 
+        # Calculate indicators
         try:
             trend = get_trend_signal(bars, None, None)
+            rsi_value = _rsi(bars['close'])
+            macd_line, macd_signal = _macd(bars['close'])
+            macd_bull = macd_line > macd_signal
         except Exception as e:
-            logger.error(f"{self.prefix} [{ticker}] Error getting trend: {e}")
+            logger.error(f"{self.prefix} [{ticker}] Error getting indicators: {e}")
             return
 
         # Get current mark
         mark = self._get_current_mark(ticker, pos)
-        
+
         if mark is None:
             logger.debug(f"{self.prefix} [{ticker}] No live mark - skipping cycle")
             return
 
-        # Parse entry time
+        # Parse entry time and calculate hold duration
         try:
             entry_dt = datetime.fromisoformat(pos["entry_time"])
         except:
             entry_dt = now
 
+        hold_seconds = (now - entry_dt).total_seconds()
+        hold_minutes = hold_seconds / 60
+
         debit = pos["debit"]
         profit_pct = (mark - debit) / debit if debit > 0 else 0
 
         logger.debug(f"{self.prefix} [{ticker}] LONG {'CALL' if pos['is_call'] else 'PUT'} "
-                    f"{pos['strike_price']:.1f} | Debit: ${debit:.2f} → Mark: ${mark:.2f} "
-                    f"({profit_pct*100:+.1f}%)")
+                    f"{pos['strike_price']:.1f} | ${debit:.2f}→${mark:.2f} "
+                    f"({profit_pct*100:+.1f}%) | Hold: {hold_minutes:.1f}m")
 
-        # Update best mark and trailing
+        # Update best mark for trailing
         if mark > pos["best_mark"]:
             pos["best_mark"] = mark
             if pos["trail_active"]:
-                pos["trail_level"] = pos["best_mark"] * 0.90
-                logger.info(f"{self.prefix} [{ticker}] Trail moved to ${pos['trail_level']:.2f}")
+                pos["trail_level"] = pos["best_mark"] * 0.95  # 5% trail
+                logger.info(f"{self.prefix} [{ticker}] Trail → ${pos['trail_level']:.2f}")
 
-        # Check exit conditions
+        # ============ TIGHT SCALP EXIT LOGIC ============
         realized = None
+        exit_reason = None
 
-        # 1. Hard 40% profit target
-        if profit_pct >= 0.40:
+        # 1. QUICK SCALP: +8% in first 2 minutes = take profit
+        if profit_pct >= 0.08 and hold_minutes <= 2:
             realized = (mark - debit) * pos["contracts"] * 100
-            logger.info(f"{self.prefix} [{ticker}] 40% profit target hit")
+            exit_reason = f"Quick scalp +{profit_pct*100:.0f}% in {hold_minutes:.1f}m"
 
-        # 2. Option worthless
-        elif mark <= 0.00:
-            realized = -debit * pos["contracts"] * 100
-            logger.warning(f"{self.prefix} [{ticker}] Option worthless")
-
-        # 3. 30% loss stop
-        elif profit_pct <= -0.30:
+        # 2. PROFIT TARGET: 20% (reduced from 40%)
+        elif profit_pct >= 0.20:
             realized = (mark - debit) * pos["contracts"] * 100
-            logger.warning(f"{self.prefix} [{ticker}] 30% loss stop hit")
+            exit_reason = f"Profit target +{profit_pct*100:.0f}%"
 
-        # 4. Reversal exit
+        # 3. TRAILING STOP HIT
+        elif pos["trail_active"] and mark <= pos["trail_level"]:
+            realized = (mark - debit) * pos["contracts"] * 100
+            exit_reason = f"Trail stop @ ${pos['trail_level']:.2f}"
+
+        # 4. TIGHT STOP: 15% loss (reduced from 30%)
+        elif profit_pct <= -0.15:
+            realized = (mark - debit) * pos["contracts"] * 100
+            exit_reason = f"Stop loss {profit_pct*100:.0f}%"
+
+        # 5. TIME DECAY STOP: After 5min, tighten to 10% loss
+        elif hold_minutes > 5 and profit_pct <= -0.10:
+            realized = (mark - debit) * pos["contracts"] * 100
+            exit_reason = f"Time decay stop {profit_pct*100:.0f}% after {hold_minutes:.0f}m"
+
+        # 6. TREND REVERSAL
         elif (pos["is_call"] and trend == "bear") or (not pos["is_call"] and trend == "bull"):
             realized = (mark - debit) * pos["contracts"] * 100
-            logger.info(f"{self.prefix} [{ticker}] Reversal exit (trend changed)")
+            exit_reason = f"Trend reversal → {trend}"
 
-        # 5. Chop counter
+        # 7. MOMENTUM FADE: RSI diverges from position
+        elif pos["is_call"] and rsi_value < 40:
+            realized = (mark - debit) * pos["contracts"] * 100
+            exit_reason = f"Momentum fade RSI={rsi_value:.0f} (call)"
+        elif not pos["is_call"] and rsi_value > 60:
+            realized = (mark - debit) * pos["contracts"] * 100
+            exit_reason = f"Momentum fade RSI={rsi_value:.0f} (put)"
+
+        # 8. MACD CROSSOVER against position
+        elif pos["is_call"] and not macd_bull and hold_minutes > 1:
+            realized = (mark - debit) * pos["contracts"] * 100
+            exit_reason = "MACD bearish cross (call)"
+        elif not pos["is_call"] and macd_bull and hold_minutes > 1:
+            realized = (mark - debit) * pos["contracts"] * 100
+            exit_reason = "MACD bullish cross (put)"
+
+        # 9. CHOP EXIT: 2 consecutive chop cycles (reduced from 3)
         elif trend == "chop":
-            pos["chop_count"] += 1
-            if pos["chop_count"] >= 3:
+            pos["chop_count"] = pos.get("chop_count", 0) + 1
+            if pos["chop_count"] >= 2:
                 realized = (mark - debit) * pos["contracts"] * 100
-                logger.info(f"{self.prefix} [{ticker}] Chop exit (3 consecutive cycles)")
+                exit_reason = "Chop exit (2 cycles)"
         else:
             pos["chop_count"] = 0
 
-        # 6. 20-minute max hold
-        if realized is None and (now - entry_dt) > timedelta(minutes=20):
+        # 10. MAX HOLD: 8 minutes (reduced from 20)
+        if realized is None and hold_minutes > 8:
             realized = (mark - debit) * pos["contracts"] * 100
-            logger.info(f"{self.prefix} [{ticker}] 20-min max hold exit")
+            exit_reason = f"Max hold {hold_minutes:.0f}m"
 
-        # 7. EOD exit at 3:30 PM
+        # 11. EOD EXIT: 3:30 PM
         if realized is None and now.time() >= time(15, 30):
             realized = (mark - debit) * pos["contracts"] * 100
-            logger.info(f"{self.prefix} [{ticker}] EOD exit (3:30 PM)")
+            exit_reason = "EOD 3:30 PM"
 
-        # 8. 20% profit activates 10% trailing stop
-        if realized is None and profit_pct >= 0.20:
-            if not pos["trail_active"]:
-                pos["trail_active"] = True
-                pos["trail_level"] = pos["best_mark"] * 0.90
-                logger.info(f"{self.prefix} [{ticker}] 20% profit - 10% trailing stop "
-                          f"activated @ ${pos['trail_level']:.2f}")
-                
-                try:
-                    send_webhook(f"**TRAIL ACTIVATED – {ticker}** 20% profit. "
-                               f"10% trail active @ ${pos['trail_level']:.2f}")
-                except Exception as e:
-                    logger.error(f"{self.prefix} Failed to send webhook: {e}")
+        # 12. OPTION WORTHLESS
+        if realized is None and mark <= 0.01:
+            realized = -debit * pos["contracts"] * 100
+            exit_reason = "Option worthless"
 
-            # Check if trailing stop hit
-            if mark <= pos["trail_level"]:
-                realized = (mark - debit) * pos["contracts"] * 100
-                logger.info(f"{self.prefix} [{ticker}] Trailing stop hit")
+        # 13. ACTIVATE TRAILING: 10% profit starts 5% trail (earlier activation)
+        if realized is None and profit_pct >= 0.10 and not pos["trail_active"]:
+            pos["trail_active"] = True
+            pos["trail_level"] = pos["best_mark"] * 0.95
+            logger.info(f"{self.prefix} [{ticker}] +10% - 5% trail active @ ${pos['trail_level']:.2f}")
+            try:
+                send_webhook(f"**TRAIL** {ticker} +{profit_pct*100:.0f}% → 5% trail @ ${pos['trail_level']:.2f}")
+            except:
+                pass
 
-        # Exit if any condition triggered
+        # Execute exit
         if realized is not None:
+            logger.info(f"{self.prefix} [{ticker}] EXIT: {exit_reason}")
             self.exit_position(ticker, pos, realized, mark)
 
     def exit_position(self, ticker: str, pos: Dict, realized_pnl: float, final_mark: float):
