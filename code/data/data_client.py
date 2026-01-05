@@ -65,8 +65,9 @@ def calculate_greeks(S, K, T, r, IV, option_type):
 if DATA_PROVIDER == "alpaca":
     from alpaca.data.historical.stock import StockHistoricalDataClient
     from alpaca.data.historical.option import OptionHistoricalDataClient
-    from alpaca.data.requests import StockBarsRequest, OptionChainRequest
+    from alpaca.data.requests import StockBarsRequest, OptionChainRequest, StockSnapshotRequest
     from alpaca.data.timeframe import TimeFrame
+    from alpaca.data.enums import DataFeed  # Required for SIP feed
 
     class DataClient:
         def __init__(self):
@@ -91,19 +92,51 @@ if DATA_PROVIDER == "alpaca":
             if df.empty:
                 print(f"[DATA] No bars returned for {ticker}")
                 return df
-           
-            # Handle MultiIndex (symbol + timestamp) – common even for single ticker
+
+            # Handle MultiIndex (symbol + timestamp)
             if isinstance(df.index, pd.MultiIndex):
                 df = df.droplevel(0)  # Remove symbol level
-           
+
             # Ensure proper DatetimeIndex in EST
             df.index = pd.to_datetime(df.index)
-            df = df.tz_convert('America/New_York') if df.index.tz is not None else df.index.tz_localize('America/New_York')
-           
+            df = df.tz_convert('America/New_York') if df.index.tz is not None else df.tz_localize('America/New_York')
+
             # Sort just in case
             df = df.sort_index()
-           
+
             return df
+
+        def get_underlying_mark(self, symbol: str = "SPY") -> float | None:
+            """
+            Fetch live midpoint mark for underlying ETF using SIP consolidated feed.
+            Requires Algo Trader Plus (paid) subscription.
+            Returns midpoint (bid+ask)/2 if available, else latest trade price, else None.
+            """
+            request = StockSnapshotRequest(
+                symbol_or_symbols=symbol,
+                feed=DataFeed.SIP  # Critical: uses full consolidated real-time quotes
+            )
+            try:
+                snapshot = self.stock_client.get_stock_snapshot(request)
+                data = snapshot[symbol]
+
+                # Prefer quote midpoint
+                if data.latest_quote and data.latest_quote.bid_price > 0 and data.latest_quote.ask_price > 0:
+                    mark = (data.latest_quote.bid_price + data.latest_quote.ask_price) / 2
+                    print(f"[DATA] {symbol} SIP mark (quote): {mark:.2f}")
+                    return mark
+
+                # Fallback to latest trade
+                if data.latest_trade and data.latest_trade.price > 0:
+                    mark = data.latest_trade.price
+                    print(f"[DATA] {symbol} SIP mark (trade fallback): {mark:.2f}")
+                    return mark
+
+                print(f"[DATA] {symbol} No valid quote or trade in SIP snapshot")
+            except Exception as e:
+                print(f"[DATA] {symbol} SIP snapshot failed: {e}")
+
+            return None
 
         def get_spy_option_chain(self, expiration_date: str, ticker: str = "SPY") -> pd.DataFrame:
             request = OptionChainRequest(
@@ -113,6 +146,7 @@ if DATA_PROVIDER == "alpaca":
             chain_dict = self.option_client.get_option_chain(request)
             if not chain_dict:
                 return pd.DataFrame()
+
             try:
                 end_time = datetime.now()
                 start_time = end_time - timedelta(minutes=5)
@@ -120,10 +154,12 @@ if DATA_PROVIDER == "alpaca":
                 S = current_bars['close'].iloc[-1] if not current_bars.empty else {"SPY": 680.0, "QQQ": 480.0, "IWM": 220.0}.get(ticker, 100.0)
             except Exception:
                 S = {"SPY": 680.0, "QQQ": 480.0, "IWM": 220.0}.get(ticker, 100.0)
+
             r = 0.04
             now = datetime.now()
             expiration_dt = datetime.strptime(expiration_date, "%Y-%m-%d")
             T = max(((expiration_dt - now).total_seconds() / (365.25 * 24 * 3600)), 1e-6)
+
             rows = []
             symbol_pattern = re.compile(rf'{ticker}\d{{6}}([CP])(\d{{8}})')
             for symbol, snap in chain_dict.items():
@@ -139,12 +175,14 @@ if DATA_PROVIDER == "alpaca":
                 calc_gamma = snap.greeks.gamma if snap.greeks else None
                 calc_theta = snap.greeks.theta if snap.greeks else None
                 calc_vega = snap.greeks.vega if snap.greeks else None
+
                 if (calc_iv is None or calc_delta is None) and bid_price and ask_price and bid_price > 0:
                     mid_price = (bid_price + ask_price) / 2
                     calculated_iv = calculate_implied_volatility(mid_price, S, K, T, r, opt_type)
                     if calculated_iv is not None:
                         calc_iv = calculated_iv
                         calc_delta, calc_gamma, calc_theta, calc_vega = calculate_greeks(S, K, T, r, calculated_iv, opt_type)
+
                 rows.append({
                     "symbol": symbol,
                     "strike_price": K,
@@ -157,6 +195,7 @@ if DATA_PROVIDER == "alpaca":
                     "vega": calc_vega,
                     "implied_volatility": calc_iv,
                 })
+
             return pd.DataFrame(rows)
 
         def get_spx_option_chain(self, expiration_date: str) -> pd.DataFrame:
@@ -167,10 +206,10 @@ elif DATA_PROVIDER == "polygon":
         def __init__(self): raise NotImplementedError("Polygon stub")
         def get_spy_bars(self, start, end, ticker="SPY"): raise NotImplementedError
         def get_spy_option_chain(self, expiration_date, ticker="SPY"): raise NotImplementedError
+        def get_underlying_mark(self, symbol="SPY"): raise NotImplementedError
 
 # ── LAZY SINGLETON ──
 _instance = None
-
 def get_data_client():
     """Return the singleton DataClient instance, creating it only on first call."""
     global _instance
@@ -178,5 +217,5 @@ def get_data_client():
         _instance = DataClient()
     return _instance
 
-# Compatibility for existing code — keeps "from ... import data_client" working
+# Compatibility for existing code
 data_client = get_data_client()

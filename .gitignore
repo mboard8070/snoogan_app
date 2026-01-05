@@ -6174,3 +6174,15 @@ frontend/package.json
 frontend/tsconfig.app.json
 frontend/tsconfig.json
 frontend/tsconfig.node.json
+# Lock files
+*.lock
+*.json.lock
+
+# Large model files
+*.gguf
+models/
+llama.cpp/
+
+# Build artifacts
+*.map
+venv/

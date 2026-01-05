@@ -159,16 +159,21 @@ def send_scalp_exit(is_call: bool = True, strike: float = 0.0, debit: float = 0.
            f"Strike: {strike:.2f} | P/L: ${pnl:+.2f}")
     send_webhook(msg)
 
-def send_eod_if_needed(trade_count_today: int = 0):
+def send_eod_if_needed(trade_count_today: int = 0, daily_pnl: float = 0.0):
     if not is_ready():
         return
     now = datetime.now(est)
     if _has_sent(EOD_FLAG):
         return
     if time(14, 30) <= now.time() < time(17, 0):
+        pnl_status = "✅" if daily_pnl >= 0 else "❌"
         if trade_count_today == 0:
-            msg = "**END OF DAY**\nAll positions closed. Capital preserved."
+            msg = (f"**END OF DAY** {pnl_status}\n"
+                   f"Daily P&L: ${daily_pnl:+.2f}\n"
+                   f"All positions closed. Capital preserved.")
         else:
-            msg = f"**END OF DAY**\n{trade_count_today} trade(s) executed today. Full details on dashboard."
+            msg = (f"**END OF DAY** {pnl_status}\n"
+                   f"Daily P&L: ${daily_pnl:+.2f}\n"
+                   f"{trade_count_today} trade(s) executed today.")
         send_webhook(msg)
         _mark_sent(EOD_FLAG)

@@ -173,17 +173,21 @@ def get_trend_signal(bars_1m: pd.DataFrame, bars_5m: pd.DataFrame = None, bars_1
     lstm_pred = _lstm_predict(bars_1m['close'])
     lstm_vote = 1 if lstm_pred == "bull" else -1 if lstm_pred == "bear" else 0
   
+    # LSTM vote weight: +1.2 for bull, -1.2 for bear, 0 for chop
+    lstm_bull_weight = 1.2 if lstm_vote > 0 else 0
+    lstm_bear_weight = 1.2 if lstm_vote < 0 else 0
+
     bull_score = (vwap_votes / num_tfs if num_tfs else 0) + \
                  (ema_votes / len(ema_tfs) if ema_tfs else 0) + \
                  1.5 * (macd_votes / len(macd_tfs) if macd_tfs else 0) + \
-                 (rsi_votes > 0) + \
-                 1.2 * lstm_vote if lstm_vote != 0 else 0
-                
+                 (1 if rsi_votes > 0 else 0) + \
+                 lstm_bull_weight
+
     bear_score = ((num_tfs - vwap_votes) / num_tfs if num_tfs else 0) + \
                  ((len(ema_tfs) - ema_votes) / len(ema_tfs) if ema_tfs else 0) + \
                  1.5 * ((len(macd_tfs) - macd_votes) / len(macd_tfs) if macd_tfs else 0) + \
-                 (rsi_votes < 0) + \
-                 1.2 * (lstm_vote < 0)
+                 (1 if rsi_votes < 0 else 0) + \
+                 lstm_bear_weight
   
     if bull_score >= 3.5 or (bull_score >= 3 and atr_1m < price * 0.003):
         return "bull"
