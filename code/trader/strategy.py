@@ -215,6 +215,10 @@ class TradingStrategy:
             return False
         return True
 
+    def is_conservative_mode(self) -> bool:
+        """Check if we should be more selective (daily PnL >= $1000)"""
+        return self.daily_pnl >= 1000.0
+
     def _train_lstm_if_needed(self, now: datetime):
         """Train LSTM model once per trading day"""
         current_date = now.date()
@@ -246,7 +250,8 @@ class TradingStrategy:
 
         # Log cycle start at DEBUG level to reduce noise
         logger.debug(f"{self.prefix} Cycle start: {now.strftime('%H:%M:%S')}")
-        logger.info(f"{self.prefix} Daily P&L: ${self.daily_pnl:+.2f} | Open: {len(self.positions)}")
+        mode = "CONSERVATIVE" if self.is_conservative_mode() else "NORMAL"
+        logger.info(f"{self.prefix} Daily P&L: ${self.daily_pnl:+.2f} | Open: {len(self.positions)} | Mode: {mode}")
 
         # LSTM training (once per day)
         try:
@@ -383,15 +388,15 @@ class TradingStrategy:
             logger.error(f"{self.prefix} [{ticker}] Error fetching chain: {e}")
             return None
 
-    def _get_spread_price(self, short_contract: Dict, long_contract: Dict) -> Optional[float]:
+    def _get_spread_price(self, short_contract: Dict, long_contract: Dict, for_entry: bool = False) -> Optional[float]:
         """Calculate net credit for a vertical spread"""
         try:
             # Find bid/ask columns (multiple possible names)
-            bid_col = next((col for col in ['bid', 'bid_price', 'b'] 
+            bid_col = next((col for col in ['bid', 'bid_price', 'b']
                           if col in short_contract), None)
-            ask_col = next((col for col in ['ask', 'ask_price', 'a'] 
+            ask_col = next((col for col in ['ask', 'ask_price', 'a']
                           if col in short_contract), None)
-            
+
             if bid_col is None or ask_col is None:
                 return None
 
@@ -406,14 +411,14 @@ class TradingStrategy:
 
             # Calculate credit
             credit = short_bid - long_ask
-            
-            # Minimum credit filter
-            if credit < 0.15:
+
+            # Minimum credit filter - only apply during entry
+            if for_entry and credit < 0.15:
                 return None
 
             # Return mid-market spread price
             return round((short_bid + short_ask)/2 - (long_bid + long_ask)/2, 2)
-            
+
         except Exception as e:
             logger.error(f"{self.prefix} Error calculating spread price: {e}")
             return None
@@ -421,6 +426,7 @@ class TradingStrategy:
     def _attempt_entry(self, ticker: str, trend: str, chain: pd.DataFrame, price: float):
         """Attempt to enter a new credit spread position"""
 
+        conservative = self.is_conservative_mode()
         is_put = trend == "bull"  # Bull trend -> put credit spread
         now = datetime.now(EST)
 
@@ -430,6 +436,7 @@ class TradingStrategy:
             "price": round(price, 2),
             "hour": now.hour,
             "day_of_week": now.strftime("%A"),
+            "conservative_mode": conservative,
         }
         
         # Validate chain columns
@@ -474,6 +481,14 @@ class TradingStrategy:
 
         # Select best credit spread
         best_credit, best_short, best_long = max(candidates, key=lambda x: x[0])
+
+        # Conservative mode: require higher minimum credit
+        if conservative:
+            min_credit = 0.25  # Higher minimum in conservative mode
+            if best_credit < min_credit:
+                logger.info(f"{self.prefix} [{ticker}] NO TRADE (CONSERVATIVE): "
+                           f"Credit ${best_credit:.2f} < ${min_credit:.2f} minimum")
+                return
         short_strike = float(best_short[strike_col])
         long_strike = float(best_long[strike_col])
         contracts = 10
@@ -561,10 +576,11 @@ class TradingStrategy:
 
             for _, long_row in long_opts.iterrows():
                 credit = self._get_spread_price(
-                    short_row.to_dict(), 
-                    long_row.to_dict()
+                    short_row.to_dict(),
+                    long_row.to_dict(),
+                    for_entry=True
                 )
-                
+
                 if credit is not None:
                     candidates.append((credit, short_row, long_row))
 
@@ -627,16 +643,21 @@ class TradingStrategy:
         """Manage a single position"""
         
         current_value = self._get_current_mark(ticker, pos)
-        
+
         if current_value is None:
-            logger.debug(f"{self.prefix} [{ticker}] No spread mark - skipping cycle")
+            logger.info(f"{self.prefix} [{ticker}] No spread mark - skipping cycle")
             return
 
+        # Store current value for dashboard display
+        pos["current_value"] = current_value
+
         credit = pos["credit"]
-        
-        logger.debug(f"{self.prefix} [{ticker}] {'PUT' if pos['is_put'] else 'CALL'} "
-                    f"{pos['short']:.1f}/{pos['long']:.1f} | "
-                    f"Entry: ${credit:.2f} | Current: ${current_value:.2f}")
+        unrealized = (credit - current_value) * pos["contracts"] * 100
+
+        logger.info(f"{self.prefix} [{ticker}] {'PUT' if pos['is_put'] else 'CALL'} "
+                   f"{pos['short']:.1f}/{pos['long']:.1f} | "
+                   f"Entry: ${credit:.2f} | Current: ${current_value:.2f} | "
+                   f"Unrealized: ${unrealized:+.2f}")
 
         # Update best value and trailing stop
         if current_value < pos["best_value"]:

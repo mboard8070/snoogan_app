@@ -134,10 +134,15 @@ def train_lstm_daily(bars_1m: pd.DataFrame, seq_len: int = 60, epochs: int = 8):
     for epoch in range(epochs):
         epoch_loss = 0.0
         for batch_x, batch_y in loader:
+            # Detach inputs to prevent gradient accumulation across batches
+            batch_x = batch_x.detach()
+            batch_y = batch_y.detach()
+
             _optimizer.zero_grad()
             pred = _lstm_model(batch_x)
             loss = _criterion(pred, batch_y)
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(_lstm_model.parameters(), max_norm=1.0)
             _optimizer.step()
             epoch_loss += loss.item()
         print(f"[LSTM] Epoch {epoch+1}/{epochs} - loss: {epoch_loss/len(loader):.6f}")

@@ -342,18 +342,21 @@ def format_strategy_status(strategy, strategy_type: str = "spread") -> str:
                     strike = pos.get("strike_price", 0)
                     debit = pos.get("debit", 0)
                     contracts = pos.get("contracts", 1)
+                    current_mark = pos.get("current_mark", pos.get("best_mark", debit))
                     best_mark = pos.get("best_mark", debit)
                     trail_active = pos.get("trail_active", False)
                     trail_level = pos.get("trail_level")
                     entry_time = pos.get("entry_time", "unknown")
 
                     # Calculate unrealized P&L
-                    unrealized = (best_mark - debit) * contracts * 100
-                    pnl_pct = ((best_mark - debit) / debit * 100) if debit > 0 else 0
+                    unrealized = (current_mark - debit) * contracts * 100
+                    pnl_pct = ((current_mark - debit) / debit * 100) if debit > 0 else 0
+                    best_unrealized = (best_mark - debit) * contracts * 100
 
                     lines.append(f"  {ticker}: LONG {direction} @ {strike:.1f}")
                     lines.append(f"    Debit: ${debit:.2f} x {contracts} = ${debit * contracts * 100:.2f}")
-                    lines.append(f"    Best Mark: ${best_mark:.2f} | Unrealized: ${unrealized:+.2f} ({pnl_pct:+.1f}%)")
+                    lines.append(f"    Current: ${current_mark:.2f} | Unrealized: ${unrealized:+.2f} ({pnl_pct:+.1f}%)")
+                    lines.append(f"    Best: ${best_mark:.2f} | Best P&L: ${best_unrealized:+.2f}")
                     if trail_active:
                         lines.append(f"    Trail Active @ ${trail_level:.2f}")
                     lines.append(f"    Entry: {str(entry_time).split('T')[0] if 'T' in str(entry_time) else entry_time}")
@@ -364,18 +367,21 @@ def format_strategy_status(strategy, strategy_type: str = "spread") -> str:
                     long = pos.get("long", 0)
                     credit = pos.get("credit", 0)
                     contracts = pos.get("contracts", 1)
+                    current_value = pos.get("current_value", pos.get("best_value", credit))
                     best_value = pos.get("best_value", credit)
                     trail_active = pos.get("trail_active", False)
                     trail_level = pos.get("trail_level")
                     entry_time = pos.get("entry_time", "unknown")
 
                     # For credit spreads, lower value = more profit
-                    unrealized = (credit - best_value) * contracts * 100
+                    unrealized = (credit - current_value) * contracts * 100
+                    best_unrealized = (credit - best_value) * contracts * 100
                     max_profit = credit * contracts * 100
 
                     lines.append(f"  {ticker}: {direction} SPREAD {short:.1f}/{long:.1f}")
                     lines.append(f"    Credit: ${credit:.2f} x {contracts} = ${credit * contracts * 100:.2f}")
-                    lines.append(f"    Current: ${best_value:.2f} | Unrealized: ${unrealized:+.2f}")
+                    lines.append(f"    Current: ${current_value:.2f} | Unrealized: ${unrealized:+.2f}")
+                    lines.append(f"    Best: ${best_value:.2f} | Best P&L: ${best_unrealized:+.2f}")
                     lines.append(f"    Max Profit: ${max_profit:.2f}")
                     if trail_active:
                         lines.append(f"    Trail Active @ ${trail_level:.2f}")

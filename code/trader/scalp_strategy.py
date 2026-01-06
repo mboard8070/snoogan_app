@@ -256,18 +256,22 @@ class ScalpStrategy:
                 ((self._get_current_mark(t, p) or p['debit']) - p['debit']) * p['contracts'] * 100
                 for t, p in self.positions.items()
             )
-            
+
             total_pnl = self.daily_pnl + unrealized
-            
+
             if total_pnl <= self.daily_loss_limit:
                 logger.warning(f"{self.prefix} Daily loss limit hit (incl unrealized): "
                              f"${total_pnl:.2f} <= ${self.daily_loss_limit:.2f}")
                 return False
-                
+
         except Exception as e:
             logger.error(f"{self.prefix} Error checking loss nanny: {e}")
-            
+
         return True
+
+    def is_conservative_mode(self) -> bool:
+        """Check if we should be more selective (daily PnL >= $1000)"""
+        return self.daily_pnl >= 1000.0
 
     def _cached_fetch(self, key: Tuple, fetch_func, ttl: int = 10):
         """Simple cache with TTL to reduce API calls"""
@@ -295,7 +299,8 @@ class ScalpStrategy:
 
         # Log cycle start
         logger.debug(f"{self.prefix} Cycle start: {now.strftime('%H:%M:%S')}")
-        logger.info(f"{self.prefix} Daily P&L: ${self.daily_pnl:+.2f} | Open: {len(self.positions)}")
+        mode = "CONSERVATIVE" if self.is_conservative_mode() else "NORMAL"
+        logger.info(f"{self.prefix} Daily P&L: ${self.daily_pnl:+.2f} | Open: {len(self.positions)} | Mode: {mode}")
 
         # Check if we should be active
         if not self.is_scanning_active():
@@ -350,27 +355,12 @@ class ScalpStrategy:
             trend = get_trend_signal(bars, None, None)
             self.current_trends[ticker] = trend  # Store for dashboard display
 
-            macd_line, macd_signal = _macd(bars['close'])
+            macd_line, macd_signal = _macd(bars['close'])  # Returns (float, float)
+            is_momentum_bull = macd_line > macd_signal
             
-            # Ensure MACD values are Series
-            if not isinstance(macd_line, pd.Series):
-                macd_line = pd.Series(macd_line) if hasattr(macd_line, '__iter__') else pd.Series([macd_line])
-            if not isinstance(macd_signal, pd.Series):
-                macd_signal = pd.Series(macd_signal) if hasattr(macd_signal, '__iter__') else pd.Series([macd_signal])
-                
-            if len(macd_line) < 1 or len(macd_signal) < 1:
-                logger.debug(f"{self.prefix} [{ticker}] Empty MACD data")
-                return
-                
-            is_momentum_bull = macd_line.iloc[-1] > macd_signal.iloc[-1]
-            
-            rsi = _rsi(bars['close'])
-            if len(rsi) < 1:
-                logger.debug(f"{self.prefix} [{ticker}] Insufficient RSI data")
-                return
-                
+            rsi_value = _rsi(bars['close'])  # Returns a single float
             price = bars['close'].iloc[-1]
-            
+
         except Exception as e:
             logger.error(f"{self.prefix} [{ticker}] Error calculating indicators: {e}")
             return
@@ -381,24 +371,30 @@ class ScalpStrategy:
             lambda: data_client.get_spy_option_chain(now.strftime("%Y-%m-%d"), ticker=ticker),
             ttl=8
         )
-        
+
         if chain is None or chain.empty:
             logger.debug(f"{self.prefix} [{ticker}] No option chain")
             return
 
         logger.debug(f"{self.prefix} [{ticker}] Price: ${price:.2f} | Trend: {trend} | "
-                    f"MACD Bull: {is_momentum_bull} | RSI: {rsi.iloc[-1]:.2f}")
+                    f"MACD Bull: {is_momentum_bull} | RSI: {rsi_value:.2f}")
 
         # Entry logic
         if ticker not in self.positions:
             if self.can_enter_trades():
-                self._check_entry_conditions(ticker, trend, is_momentum_bull, rsi.iloc[-1], chain, price, now)
+                self._check_entry_conditions(ticker, trend, is_momentum_bull, rsi_value, chain, price, now)
+            else:
+                logger.info(f"{self.prefix} [{ticker}] NO TRADE: Outside entry hours (9:31am-3pm ET)")
         else:
-            logger.debug(f"{self.prefix} [{ticker}] Monitoring existing position")
+            logger.info(f"{self.prefix} [{ticker}] NO TRADE: Already have open position")
 
     def _check_entry_conditions(self, ticker: str, trend: str, is_momentum_bull: bool,
                                 rsi_value: float, chain: pd.DataFrame, price: float, now: datetime):
         """Check if entry conditions are met"""
+
+        conservative = self.is_conservative_mode()
+        if conservative:
+            logger.info(f"{self.prefix} CONSERVATIVE MODE active (P&L ${self.daily_pnl:+.0f}) - higher standards")
 
         # Determine direction
         new_dir = None
@@ -407,13 +403,15 @@ class ScalpStrategy:
         elif trend == "bear":
             new_dir = 'bear'
         else:
-            return  # Chop - no entry
+            logger.info(f"{self.prefix} [{ticker}] NO TRADE: Trend is CHOP (no clear direction)")
+            return
 
         # Check cooloff period after opposite direction exit
         if ticker in self.last_exit:
             last_dir, last_time = self.last_exit[ticker]
-            if (now - last_time) < timedelta(minutes=5) and new_dir != last_dir:
-                logger.debug(f"{self.prefix} [{ticker}] Cooloff after opposite exit")
+            cooloff_minutes = 10 if conservative else 5  # Longer cooloff in conservative mode
+            if (now - last_time) < timedelta(minutes=cooloff_minutes) and new_dir != last_dir:
+                logger.info(f"{self.prefix} [{ticker}] NO TRADE: Cooloff period after {last_dir} exit")
                 return
 
         # Build market context for learning
@@ -424,15 +422,43 @@ class ScalpStrategy:
             "price": round(price, 2),
             "hour": now.hour,
             "day_of_week": now.strftime("%A"),
+            "conservative_mode": conservative,
         }
+
+        # Conservative mode: Stricter RSI requirements
+        if conservative:
+            # Bull: RSI must be 55-70 (strong but not overbought)
+            # Bear: RSI must be 30-45 (weak but not oversold)
+            if trend == "bull" and not (55 <= rsi_value <= 70):
+                logger.info(f"{self.prefix} [{ticker}] NO TRADE (CONSERVATIVE): Bull RSI {rsi_value:.1f} not in 55-70 range")
+                return
+            if trend == "bear" and not (30 <= rsi_value <= 45):
+                logger.info(f"{self.prefix} [{ticker}] NO TRADE (CONSERVATIVE): Bear RSI {rsi_value:.1f} not in 30-45 range")
+                return
 
         # Bull entry conditions
         if trend == "bull" and is_momentum_bull and rsi_value > 50:
             self._attempt_entry(ticker, True, chain, price, market_context)
+        elif trend == "bull":
+            # Bull trend but other conditions not met
+            reasons = []
+            if not is_momentum_bull:
+                reasons.append("MACD bearish")
+            if rsi_value <= 50:
+                reasons.append(f"RSI too low ({rsi_value:.1f})")
+            logger.info(f"{self.prefix} [{ticker}] NO TRADE: Bull trend but {', '.join(reasons)}")
 
         # Bear entry conditions
         elif trend == "bear" and not is_momentum_bull and rsi_value < 50:
             self._attempt_entry(ticker, False, chain, price, market_context)
+        elif trend == "bear":
+            # Bear trend but other conditions not met
+            reasons = []
+            if is_momentum_bull:
+                reasons.append("MACD bullish")
+            if rsi_value >= 50:
+                reasons.append(f"RSI too high ({rsi_value:.1f})")
+            logger.info(f"{self.prefix} [{ticker}] NO TRADE: Bear trend but {', '.join(reasons)}")
 
     def _get_option_mark(self, row: pd.Series) -> Optional[float]:
         """Calculate mid-market option price"""
@@ -484,11 +510,26 @@ class ScalpStrategy:
                         return
 
                     hist = recommendation.get('historical_analysis', {})
+                    confidence = hist.get('confidence', 0)
+                    win_rate = hist.get('avg_win_rate', 0)
+
+                    # Conservative mode: require higher confidence and win rate
+                    if self.is_conservative_mode():
+                        min_confidence = 60
+                        min_win_rate = 50
+                        if confidence < min_confidence or win_rate < min_win_rate:
+                            logger.info(f"{self.prefix} [{ticker}] NO TRADE (CONSERVATIVE): "
+                                       f"Brain confidence {confidence:.0f}% < {min_confidence}% or "
+                                       f"win rate {win_rate:.0f}% < {min_win_rate}%")
+                            return
+
                     logger.info(f"{self.prefix} [{ticker}] Brain says ENTER: "
-                              f"Win rate: {hist.get('avg_win_rate', 0):.0f}% | "
-                              f"Confidence: {hist.get('confidence', 0):.0f}%")
+                              f"Win rate: {win_rate:.0f}% | Confidence: {confidence:.0f}%")
 
             except Exception as e:
+                if self.is_conservative_mode():
+                    logger.info(f"{self.prefix} [{ticker}] NO TRADE (CONSERVATIVE): Brain unavailable - {e}")
+                    return
                 logger.warning(f"{self.prefix} Brain query failed: {e} - proceeding with trade")
 
         try:
@@ -631,6 +672,9 @@ class ScalpStrategy:
             logger.debug(f"{self.prefix} [{ticker}] No live mark - skipping cycle")
             return
 
+        # Store current mark for dashboard display
+        pos["current_mark"] = mark
+
         # Parse entry time and calculate hold duration
         try:
             entry_dt = datetime.fromisoformat(pos["entry_time"])
@@ -740,7 +784,11 @@ class ScalpStrategy:
 
         # Execute exit
         if realized is not None:
-            logger.info(f"{self.prefix} [{ticker}] EXIT: {exit_reason}")
+            logger.info(f"{self.prefix} [{ticker}] EXIT: {exit_reason} | "
+                       f"Entry: ${debit:.2f} → Exit: ${mark:.2f} | "
+                       f"P&L: ${realized:+.2f} ({profit_pct*100:+.1f}%) | "
+                       f"Hold: {hold_minutes:.1f}m | "
+                       f"Trend: {trend} | RSI: {rsi_value:.0f} | MACD Bull: {macd_bull}")
             self.exit_position(ticker, pos, realized, mark)
 
     def exit_position(self, ticker: str, pos: Dict, realized_pnl: float, final_mark: float):
