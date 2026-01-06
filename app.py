@@ -268,7 +268,11 @@ def refresh_dashboard_state() -> int:
     Returns:
         The current trade count (after any archiving).
     """
-    st.session_state.strategy_1m = TradingStrategy()
+    # Don't recreate strategy - it resets in-memory state like last_lstm_train_date
+    # The strategy already loads from state file in __init__
+    # If we need fresh state, call _load_state() instead
+    if hasattr(st.session_state, 'strategy_1m'):
+        st.session_state.strategy_1m._load_state()
 
     # Archive trades if batch is complete
     archive_trades_if_batch_complete()
