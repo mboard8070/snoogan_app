@@ -273,6 +273,10 @@ def refresh_dashboard_state() -> int:
     # If we need fresh state, call _load_state() instead
     if hasattr(st.session_state, 'strategy_1m'):
         st.session_state.strategy_1m._load_state()
+    if hasattr(st.session_state, 'strategy_15m'):
+        st.session_state.strategy_15m._load_state()
+    if hasattr(st.session_state, 'strategy_scalp'):
+        st.session_state.strategy_scalp._load_state()
 
     # Archive trades if batch is complete
     archive_trades_if_batch_complete()
@@ -406,9 +410,15 @@ def format_strategy_status(strategy, strategy_type: str = "spread") -> str:
 def render_header(placeholder: st.delta_generator.DeltaGenerator) -> None:
     """Render the dashboard header with metrics and progress."""
     trade_count = refresh_dashboard_state()
-    balance = get_starting_balance()
-    pnl = st.session_state.strategy_1m.daily_pnl
-    current_equity = balance + pnl
+
+    # Get actual persisted equity from all strategies
+    equity_1m = st.session_state.strategy_1m.equity_history[-1] if st.session_state.strategy_1m.equity_history else get_starting_balance()
+    equity_15m = st.session_state.strategy_15m.equity_history[-1] if st.session_state.strategy_15m.equity_history else get_starting_balance()
+    equity_scalp = st.session_state.strategy_scalp.equity_history[-1] if st.session_state.strategy_scalp.equity_history else get_starting_balance()
+
+    # Combined equity and P&L across all strategies
+    current_equity = equity_1m + equity_15m + equity_scalp
+    pnl = st.session_state.strategy_1m.daily_pnl + st.session_state.strategy_15m.daily_pnl + st.session_state.strategy_scalp.daily_pnl
 
     # Count archived batches
     archived_batches = 0
