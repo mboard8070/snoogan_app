@@ -67,7 +67,7 @@ def send_greeting_if_needed():
     if time(8, 0) <= now.time() <= time(9, 0):
         msg = ("**SNOOGANS ONLINE**\n"
                "Strategy: Vertical credit spreads on SPY/QQQ/IWM (0DTE/1DTE).\n"
-               "Risk management: 40% profit target (then 5% trail), 1x stop loss, 2:30 PM EST cutoff.\n"
+               "Risk management: 40% profit target (then 5% trail), 1x stop loss, 4:00 PM EST cutoff.\n"
                "Defined risk only. Session started.")
         send_webhook(msg)
         _mark_sent(GREETING_FLAG)
@@ -75,7 +75,7 @@ def send_greeting_if_needed():
 def force_send_greeting():
     msg = ("**SNOOGANS ONLINE**\n"
            "Strategy: Vertical credit spreads on SPY/QQQ/IWM (0DTE/1DTE).\n"
-           "Risk management: 40% profit target (then 5% trail), 1x stop loss, 2:30 PM EST cutoff.\n"
+           "Risk management: 40% profit target (then 5% trail), 1x stop loss, 4:00 PM EST cutoff.\n"
            "Defined risk only. Session started.")
     send_webhook(msg)
     print("[DISCORD] Forced greeting sent.")
@@ -108,7 +108,7 @@ def send_entry(is_put: bool = True, short: float = 0.0, long: float = 0.0, credi
     direction = "🟢" if is_put else "🔴"
     msg = (f"**ENTRY – {underlying} {typ} CREDIT SPREAD** {direction}\n"
            f"Strikes: {short:.2f}/{long:.2f} | Credit received: ${credit:.2f}\n"
-           f"Management: 40% profit target (then 5% trail), 1x stop loss, or 2:30 PM EST cutoff.")
+           f"Management: 40% profit target (then 5% trail), 1x stop loss, or 4:00 PM EST cutoff.")
     send_webhook(msg)
 
 def send_exit(is_put: bool = True, short: float = 0.0, long: float = 0.0, credit: float = 0.0, pnl: float = 0.0, underlying: str = "SPY"):
@@ -140,7 +140,7 @@ def send_scalp_entry(is_call: bool = True, strike: float = 0.0, debit: float = 0
     direction = "🟢" if is_call else "🔴"
     msg = (f"**SCALP ENTRY – {underlying} ATM {typ}** {direction}\n"
            f"Strike: {strike:.2f} | Debit paid: ${debit:.2f}\n"
-           f"Management: Exit on chop signal, full loss, 40% profit (then 5% trail), or 2:30 PM EST cutoff.")
+           f"Management: Exit on chop signal, full loss, 40% profit (then 5% trail), or 4:00 PM EST cutoff.")
     send_webhook(msg)
 
 def send_scalp_exit(is_call: bool = True, strike: float = 0.0, debit: float = 0.0, pnl: float = 0.0, underlying: str = "SPY"):
@@ -165,7 +165,7 @@ def send_eod_if_needed(trade_count_today: int = 0, daily_pnl: float = 0.0):
     now = datetime.now(est)
     if _has_sent(EOD_FLAG):
         return
-    if time(14, 30) <= now.time() < time(17, 0):
+    if time(16, 0) <= now.time() < time(17, 0):  # 4:00 PM EST
         pnl_status = "✅" if daily_pnl >= 0 else "❌"
         if trade_count_today == 0:
             msg = (f"**END OF DAY** {pnl_status}\n"

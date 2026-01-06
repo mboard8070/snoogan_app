@@ -794,19 +794,9 @@ class ScalpStrategy:
     def exit_position(self, ticker: str, pos: Dict, realized_pnl: float, final_mark: float):
         """Close a position and update state"""
         try:
-            # Update P&L and equity
+            # Update P&L and equity (scalp strategy only - no cross-contamination)
             self.daily_pnl += realized_pnl
             self.equity_history.append(self.equity_history[-1] + realized_pnl)
-
-            # Attempt to sync with main strategy (optional)
-            try:
-                from strategy import TradingStrategy
-                main = TradingStrategy()
-                main.daily_pnl += realized_pnl
-                main.equity_history.append(main.equity_history[-1] + realized_pnl)
-                main._save_state()
-            except Exception as e:
-                logger.debug(f"{self.prefix} UI sync not available: {e}")
 
             # Send exit notification
             try:
