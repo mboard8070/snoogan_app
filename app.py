@@ -39,6 +39,7 @@ class AppConfig:
     HEADER_REFRESH_SECONDS: int = 10
     STRATEGY_1M_REFRESH_SECONDS: int = 12
     STRATEGY_15M_REFRESH_SECONDS: int = 900
+    STRATEGY_15M_MONITOR_SECONDS: int = 60  # Position monitoring between full cycles
     STRATEGY_SCALP_REFRESH_SECONDS: int = 60
 
     CHAT_BOX_HEIGHT: int = 360
@@ -68,6 +69,7 @@ KNOWLEDGE_DIR = CODE_DIR / "data" / "knowledge"  # Trades are saved here by stra
 TRADES_FILE = KNOWLEDGE_DIR / "trades.json"
 ARCHIVE_DIR = PROJECT_ROOT / "data" / "knowledge"  # Archived batches go here
 ENV_PATH = PROJECT_ROOT / "variables.env"
+SHARED_EQUITY_FILE = PROJECT_ROOT / "shared_equity.json"
 
 # Add required paths to sys.path
 _paths_to_add = [
@@ -100,6 +102,32 @@ from discord_notifier import (
     send_eod_if_needed,
     set_live_mode,
 )
+
+
+# =============================================================================
+# SHARED EQUITY HELPERS
+# =============================================================================
+
+def get_shared_equity() -> float:
+    """Read the shared equity value from the JSON file."""
+    if SHARED_EQUITY_FILE.exists():
+        try:
+            with open(SHARED_EQUITY_FILE, 'r') as f:
+                data = json.load(f)
+                return data.get('equity', float(os.getenv("STARTING_BALANCE", "100000")))
+        except (json.JSONDecodeError, KeyError):
+            pass
+    return float(os.getenv("STARTING_BALANCE", "100000"))
+
+
+def update_shared_equity(new_equity: float) -> None:
+    """Update the shared equity value in the JSON file."""
+    data = {
+        'equity': new_equity,
+        'last_updated': datetime.now().isoformat()
+    }
+    with open(SHARED_EQUITY_FILE, 'w') as f:
+        json.dump(data, f, indent=2)
 
 
 # =============================================================================
@@ -411,13 +439,10 @@ def render_header(placeholder: st.delta_generator.DeltaGenerator) -> None:
     """Render the dashboard header with metrics and progress."""
     trade_count = refresh_dashboard_state()
 
-    # Get actual persisted equity from all strategies
-    equity_1m = st.session_state.strategy_1m.equity_history[-1] if st.session_state.strategy_1m.equity_history else get_starting_balance()
-    equity_15m = st.session_state.strategy_15m.equity_history[-1] if st.session_state.strategy_15m.equity_history else get_starting_balance()
-    equity_scalp = st.session_state.strategy_scalp.equity_history[-1] if st.session_state.strategy_scalp.equity_history else get_starting_balance()
+    # Get shared equity (single source of truth)
+    current_equity = get_shared_equity()
 
-    # Combined equity and P&L across all strategies
-    current_equity = equity_1m + equity_15m + equity_scalp
+    # Combined daily P&L across all strategies
     pnl = st.session_state.strategy_1m.daily_pnl + st.session_state.strategy_15m.daily_pnl + st.session_state.strategy_scalp.daily_pnl
 
     # Count archived batches
@@ -671,6 +696,17 @@ def render_trading_logs() -> None:
         refresh_dashboard_state()
 
     sync_15m_cycle()
+
+    # 15m Position Monitoring (runs frequently between full cycles)
+    @st.fragment(run_every=CONFIG.STRATEGY_15M_MONITOR_SECONDS)
+    def monitor_15m_positions():
+        """Lightweight position monitoring for timely exits"""
+        try:
+            st.session_state.strategy_15m.monitor_only()
+        except Exception as e:
+            pass  # Silent - full cycle will log errors
+
+    monitor_15m_positions()
 
     # Scalp Strategy Log
     st.subheader("🖥️ Scalp Snoogans Log")

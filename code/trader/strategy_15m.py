@@ -35,6 +35,28 @@ EST = ZoneInfo("America/New_York")
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 STATE_FILE = PROJECT_ROOT / "strategy_15m_state.json"
 LOCK_FILE = PROJECT_ROOT / "strategy_15m_state.json.lock"
+SHARED_EQUITY_FILE = PROJECT_ROOT / "shared_equity.json"
+
+
+def update_shared_equity(realized_pnl: float) -> None:
+    """Update the shared equity file with realized PnL."""
+    try:
+        current_equity = 100000.0  # Default starting balance
+        if SHARED_EQUITY_FILE.exists():
+            with open(SHARED_EQUITY_FILE, 'r') as f:
+                data = json.load(f)
+                current_equity = data.get('equity', 100000.0)
+
+        new_equity = current_equity + realized_pnl
+        with open(SHARED_EQUITY_FILE, 'w') as f:
+            json.dump({
+                'equity': new_equity,
+                'last_updated': datetime.now(EST).isoformat()
+            }, f, indent=2)
+        logger.debug(f"Updated shared equity: ${current_equity:.2f} + ${realized_pnl:.2f} = ${new_equity:.2f}")
+    except Exception as e:
+        logger.error(f"Failed to update shared equity: {e}")
+
 
 # NYSE holidays for 2026
 NYSE_HOLIDAYS_2026 = {
@@ -210,6 +232,38 @@ class TradingStrategy15m:
     def is_conservative_mode(self) -> bool:
         """Check if we should be more selective (daily PnL >= $1000)"""
         return self.daily_pnl >= 1000.0
+
+    def monitor_only(self):
+        """Lightweight position monitoring - runs frequently between full cycles.
+        Only monitors existing positions for exits, does NOT process new entries.
+        """
+        if not self.positions:
+            return  # No positions to monitor
+
+        now = datetime.now(EST)
+        current_time = now.time()
+
+        # EOD force close
+        if self.is_trading_day() and current_time >= time(16, 0):
+            logger.warning(f"{self.prefix} EOD force close - market closed")
+            self._force_close_all_positions()
+            return
+
+        # Only monitor during market hours
+        if not self.is_scanning_active():
+            return
+
+        # Monitor positions for exits
+        try:
+            self.manage_positions()
+        except Exception as e:
+            logger.error(f"{self.prefix} Error in position monitoring: {e}", exc_info=True)
+
+        # Save state after monitoring
+        try:
+            self._save_state()
+        except Exception as e:
+            logger.error(f"{self.prefix} Error saving state: {e}", exc_info=True)
 
     def run_cycle(self):
         """Main strategy cycle - called periodically"""
@@ -697,6 +751,9 @@ class TradingStrategy15m:
             # Update P&L and equity
             self.daily_pnl += realized_pnl
             self.equity_history.append(self.equity_history[-1] + realized_pnl)
+
+            # Update shared equity (single source of truth)
+            update_shared_equity(realized_pnl)
 
             # Send exit notification
             try:
