@@ -215,12 +215,12 @@ class TradingStrategy15m:
         return time(8, 0) <= now <= time(16, 0)
 
     def can_enter_trades(self) -> bool:
-        """Check if we can enter new trades (9:35am-2:30pm ET)"""
+        """Check if we can enter new trades (9:45am-2:30pm ET)"""
         if not self.is_trading_day():
             return False
-            
+
         now = datetime.now(EST).time()
-        return time(9, 35) <= now < time(14, 30)
+        return time(9, 45) <= now < time(14, 30)
 
     def check_daily_loss_nanny(self) -> bool:
         """Check if daily loss limit has been hit"""
