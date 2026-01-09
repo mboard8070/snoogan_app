@@ -16,7 +16,7 @@ from typing import Optional, Dict, Any, Tuple, List
 
 # Import your existing modules
 from code.data.data_client import data_client
-from indicators import get_trend_signal, train_lstm_daily
+from indicators import get_trend_signal, train_lstm_daily, get_full_indicator_set
 from discord_notifier import send_entry, send_exit, set_strategy_ready
 
 # Configure logging - use INFO for production, DEBUG for troubleshooting
@@ -72,7 +72,7 @@ NYSE_HOLIDAYS_2026 = {
 
 
 class TradingStrategy:
-    """1-minute timeframe vertical credit spread strategy with LSTM training"""
+    """1-minute timeframe vertical credit spread strategy with XGBoost trend prediction"""
     
     def __init__(self):
         self.prefix = "[1m]"
@@ -158,15 +158,26 @@ class TradingStrategy:
             'last_pnl_date': self.last_pnl_date,
             'closed_trades': self.closed_trades
         }
-        
+
+        def json_serializer(obj):
+            """Handle numpy types and other non-serializable objects"""
+            import numpy as np
+            if isinstance(obj, (np.bool_, np.integer)):
+                return int(obj)
+            if isinstance(obj, np.floating):
+                return float(obj)
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+            return str(obj)
+
         try:
             with self._state_lock():
                 # Write to temporary file first, then atomic rename
                 temp_file = STATE_FILE.with_suffix('.json.tmp')
                 with open(temp_file, 'w') as f:
-                    json.dump(state, f, indent=4)
+                    json.dump(state, f, indent=4, default=json_serializer)
                 temp_file.replace(STATE_FILE)
-                
+
         except Exception as e:
             logger.error(f"{self.prefix} Failed to save state: {e}", exc_info=True)
 
@@ -240,28 +251,58 @@ class TradingStrategy:
         """Check if we should be more selective (daily PnL >= $1000)"""
         return self.daily_pnl >= 1000.0
 
-    def _train_lstm_if_needed(self, now: datetime):
-        """Train LSTM model once per trading day"""
+    def _calculate_position_size(self, confidence: float = 50.0, win_rate: float = 50.0) -> int:
+        """
+        Scale position size 5-20 contracts based on:
+        - Confidence score (0-100) - from brain or indicators
+        - Historical win rate for this pattern (0-100)
+        - Daily P&L (reduce size if losing, cap if winning big)
+        """
+        base = 5  # Minimum contracts
+
+        # Confidence scaling: 0-100 → 0-10 additional contracts
+        confidence_bonus = int(confidence / 10)
+
+        # Win rate scaling: 35-70% → 0-5 additional contracts
+        wr_bonus = max(0, int((win_rate - 35) / 7))
+
+        # Daily P&L cap adjustment
+        if self.daily_pnl < -500:
+            size_cap = 5  # Minimum only when losing badly
+        elif self.daily_pnl < 0:
+            size_cap = 10  # Reduced when in the red
+        elif self.daily_pnl > 1000:
+            size_cap = 15  # Conservative when up big (protect gains)
+        else:
+            size_cap = 20  # Full range available
+
+        calculated = min(base + confidence_bonus + wr_bonus, size_cap)
+        logger.debug(f"{self.prefix} Position size: {calculated} contracts "
+                    f"(conf={confidence:.0f}, wr={win_rate:.0f}%, cap={size_cap})")
+        return calculated
+
+    def _train_model_if_needed(self, now: datetime):
+        """Train XGBoost model once per trading day"""
         current_date = now.date()
-        
+
         if self.last_lstm_train_date != current_date and self.is_trading_day():
-            logger.info(f"{self.prefix} New trading day - starting LSTM training")
-            
+            logger.info(f"{self.prefix} New trading day - starting XGBoost training")
+
             try:
                 historical_bars = data_client.get_spy_bars(
                     now - timedelta(days=60), now, ticker="SPY"
                 )
-                
+
                 if historical_bars is not None and not historical_bars.empty:
-                    logger.info(f"{self.prefix} Training LSTM with {len(historical_bars)} bars")
-                    train_lstm_daily(historical_bars)
+                    logger.info(f"{self.prefix} Training XGBoost with {len(historical_bars)} bars")
+                    train_lstm_daily(historical_bars)  # Function now calls XGBoost internally
                     self.last_lstm_train_date = current_date
-                    logger.info(f"{self.prefix} LSTM training complete")
+                    logger.info(f"{self.prefix} XGBoost training complete")
                 else:
-                    logger.warning(f"{self.prefix} No bars received - skipping LSTM training")
-                    
+                    logger.warning(f"{self.prefix} No bars received - skipping model training")
+
             except Exception as e:
-                logger.error(f"{self.prefix} LSTM training failed: {e}", exc_info=True)
+                logger.error(f"{self.prefix} Model training failed: {e}", exc_info=True)
 
     def run_cycle(self):
         """Main strategy cycle - called periodically"""
@@ -274,11 +315,11 @@ class TradingStrategy:
         mode = "CONSERVATIVE" if self.is_conservative_mode() else "NORMAL"
         logger.info(f"{self.prefix} Daily P&L: ${self.daily_pnl:+.2f} | Open: {len(self.positions)} | Mode: {mode}")
 
-        # LSTM training (once per day)
+        # XGBoost training (once per day)
         try:
-            self._train_lstm_if_needed(now)
+            self._train_model_if_needed(now)
         except Exception as e:
-            logger.error(f"{self.prefix} Error in LSTM training check: {e}", exc_info=True)
+            logger.error(f"{self.prefix} Error in model training check: {e}", exc_info=True)
 
         # End-of-day forced closeout
         if len(self.positions) > 0 and self.is_trading_day() and current_time >= time(16, 0):
@@ -331,10 +372,10 @@ class TradingStrategy:
                 if current_value is None:
                     logger.warning(f"{self.prefix} [{ticker}] No final mark - closing at $0.00")
                     current_value = 0.0
-                    
+
                 realized = (pos["credit"] - current_value) * pos["contracts"] * 100
-                self.exit_position(ticker, pos, realized, current_value)
-                
+                self.exit_position(ticker, pos, realized, current_value, "eod_force_close")
+
             except Exception as e:
                 logger.error(f"{self.prefix} Error force closing {ticker}: {e}", exc_info=True)
 
@@ -369,7 +410,7 @@ class TradingStrategy:
         if ticker not in self.positions:
             if trend != "chop" and self.can_enter_trades():
                 try:
-                    self._attempt_entry(ticker, trend, chain, price)
+                    self._attempt_entry(ticker, trend, chain, price, minute_bars)
                 except Exception as e:
                     logger.error(f"{self.prefix} [{ticker}] Entry error: {e}", exc_info=True)
         else:
@@ -444,20 +485,30 @@ class TradingStrategy:
             logger.error(f"{self.prefix} Error calculating spread price: {e}")
             return None
 
-    def _attempt_entry(self, ticker: str, trend: str, chain: pd.DataFrame, price: float):
+    def _attempt_entry(self, ticker: str, trend: str, chain: pd.DataFrame, price: float, bars: pd.DataFrame = None):
         """Attempt to enter a new credit spread position"""
 
         conservative = self.is_conservative_mode()
         is_put = trend == "bull"  # Bull trend -> put credit spread
         now = datetime.now(EST)
 
-        # Build market context for learning
+        # Get full indicator set for learning
+        indicators = get_full_indicator_set(bars) if bars is not None else {}
+
+        # Build enhanced market context for learning
         market_context = {
             "trend": trend,
             "price": round(price, 2),
             "hour": now.hour,
             "day_of_week": now.strftime("%A"),
             "conservative_mode": conservative,
+            # Enhanced indicators for learning
+            "rsi": indicators.get("rsi", 50.0),
+            "macd_line": indicators.get("macd_line", 0.0),
+            "macd_signal": indicators.get("macd_signal", 0.0),
+            "macd_bull": indicators.get("macd_bull", False),
+            "atr": indicators.get("atr", 0.0),
+            "trend_strength": indicators.get("trend_strength", 0.0),
         }
         
         # Validate chain columns
@@ -512,7 +563,12 @@ class TradingStrategy:
                 return
         short_strike = float(best_short[strike_col])
         long_strike = float(best_long[strike_col])
-        contracts = 10
+
+        # Calculate adaptive position size
+        # Use trend_strength as confidence proxy (scaled 0-100)
+        trend_strength = abs(indicators.get("trend_strength", 0.0))
+        confidence = min(100, trend_strength * 100 + 50)  # Center at 50, scale up
+        contracts = self._calculate_position_size(confidence=confidence, win_rate=50.0)
 
         # Store position with market context for learning
         self.positions[ticker] = {
@@ -522,6 +578,7 @@ class TradingStrategy:
             "credit": best_credit,
             "contracts": contracts,
             "best_value": best_credit,
+            "worst_value": best_credit,  # Track worst for max drawdown
             "trail_active": False,
             "trail_level": None,
             "entry_time": datetime.now(EST).isoformat(),
@@ -543,7 +600,10 @@ class TradingStrategy:
             logger.error(f"{self.prefix} Failed to send entry notification: {e}")
 
         logger.info(f"{self.prefix} ENTRY: {ticker} {'PUT' if is_put else 'CALL'} "
-                   f"{short_strike:.1f}/{long_strike:.1f} @ ${best_credit:.2f}")
+                   f"{short_strike:.1f}/{long_strike:.1f} @ ${best_credit:.2f} x{contracts}")
+
+        # Save state immediately after entry to prevent duplicate messages on restart
+        self._save_state()
 
     def _find_short_candidates(self, opts: pd.DataFrame, is_put: bool, 
                               price: float, strike_col: str) -> pd.DataFrame:
@@ -684,23 +744,30 @@ class TradingStrategy:
         if current_value < pos["best_value"]:
             old_trail = pos.get("trail_level")
             pos["best_value"] = current_value
-            
+
             if pos["trail_active"]:
                 pos["trail_level"] = pos["best_value"] * 1.10
                 logger.info(f"{self.prefix} [{ticker}] Trailing stop updated: "
                           f"${pos['trail_level']:.2f} (from ${old_trail:.2f if old_trail else 'N/A'})")
 
+        # Update worst value for drawdown tracking
+        if current_value > pos.get("worst_value", current_value):
+            pos["worst_value"] = current_value
+
         # Check exit conditions
         realized = None
+        exit_reason = None
 
         # 1. Stop loss: 2x credit (100% loss)
         if current_value >= 2.0 * credit:
             realized = (credit - current_value) * pos["contracts"] * 100
+            exit_reason = "stop_loss"
             logger.warning(f"{self.prefix} [{ticker}] Stop loss hit (2x credit)")
 
         # 2. Time-based exit after 2:30 PM
         elif now.time() >= time(14, 30):
             realized = (credit - current_value) * pos["contracts"] * 100
+            exit_reason = "time_exit"
             logger.info(f"{self.prefix} [{ticker}] Time-based exit (after 2:30 PM)")
 
         # 3. Profit target: 50% of credit (activates trailing)
@@ -714,14 +781,16 @@ class TradingStrategy:
             # Check if trailing stop hit
             if current_value >= pos["trail_level"]:
                 realized = (credit - current_value) * pos["contracts"] * 100
+                exit_reason = "trailing_stop"
                 logger.info(f"{self.prefix} [{ticker}] Trailing stop hit")
 
         # Exit if any condition triggered
         if realized is not None:
-            self.exit_position(ticker, pos, realized, current_value)
+            self.exit_position(ticker, pos, realized, current_value, exit_reason)
 
-    def exit_position(self, ticker: str, pos: Dict, realized_pnl: float, final_mark: float):
-        """Close a position and update state"""
+    def exit_position(self, ticker: str, pos: Dict, realized_pnl: float, final_mark: float,
+                      exit_reason: str = "unknown"):
+        """Close a position and update state with learning metrics"""
         try:
             # Update P&L and equity
             self.daily_pnl += realized_pnl
@@ -729,6 +798,27 @@ class TradingStrategy:
 
             # Update shared equity (single source of truth)
             update_shared_equity(realized_pnl)
+
+            # Calculate learning metrics
+            credit = pos["credit"]
+            best_value = pos.get("best_value", credit)
+            worst_value = pos.get("worst_value", credit)
+            entry_time_str = pos.get("entry_time", "unknown")
+
+            # Max profit seen (credit - best_value) / credit * 100
+            max_profit_pct = ((credit - best_value) / credit * 100) if credit > 0 else 0.0
+
+            # Max drawdown seen (worst_value - credit) / credit * 100
+            max_drawdown_pct = ((worst_value - credit) / credit * 100) if credit > 0 else 0.0
+
+            # Hold duration in minutes
+            hold_duration_minutes = 0.0
+            if entry_time_str != "unknown":
+                try:
+                    entry_dt = datetime.fromisoformat(entry_time_str)
+                    hold_duration_minutes = (datetime.now(EST) - entry_dt).total_seconds() / 60.0
+                except:
+                    pass
 
             # Send exit notification
             try:
@@ -743,11 +833,16 @@ class TradingStrategy:
             except Exception as e:
                 logger.error(f"{self.prefix} Failed to send exit notification: {e}")
 
+            # Enhanced exit logging with indicators
+            market_ctx = pos.get("market_context", {})
             logger.info(f"{self.prefix} EXIT: {ticker} {'PUT' if pos['is_put'] else 'CALL'} "
                        f"{pos['short']:.1f}/{pos['long']:.1f} | "
-                       f"P&L: ${realized_pnl:+.2f} (mark ${final_mark:.2f})")
+                       f"P&L: ${realized_pnl:+.2f} | Reason: {exit_reason} | "
+                       f"Entry: ${credit:.2f} → Exit: ${final_mark:.2f} | "
+                       f"RSI: {market_ctx.get('rsi', 'N/A')} | "
+                       f"Trend: {market_ctx.get('trend', 'N/A')}")
 
-            # Archive closed trade with market context for learning
+            # Archive closed trade with market context and learning metrics
             closed_trade = {
                 "ticker": ticker,
                 "is_put": pos["is_put"],
@@ -755,9 +850,14 @@ class TradingStrategy:
                 "long": pos["long"],
                 "credit": pos["credit"],
                 "pnl": realized_pnl,
-                "entry_time": pos.get("entry_time", "unknown"),
+                "entry_time": entry_time_str,
                 "exit_time": datetime.now(EST).isoformat(),
-                "market_context": pos.get("market_context", {}),
+                "market_context": market_ctx,
+                # Learning metrics
+                "exit_reason": exit_reason,
+                "max_profit_pct": round(max_profit_pct, 2),
+                "max_drawdown_pct": round(max_drawdown_pct, 2),
+                "hold_duration_minutes": round(hold_duration_minutes, 1),
             }
             self.closed_trades.append(closed_trade)
 

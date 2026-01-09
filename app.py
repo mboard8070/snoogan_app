@@ -103,6 +103,13 @@ from discord_notifier import (
     set_live_mode,
 )
 
+# Import adaptive learner for monitoring
+try:
+    from adaptive_learner import get_learner
+    LEARNER_AVAILABLE = True
+except ImportError:
+    LEARNER_AVAILABLE = False
+
 
 # =============================================================================
 # SHARED EQUITY HELPERS
@@ -289,22 +296,16 @@ def archive_trades_if_batch_complete() -> bool:
 
 def refresh_dashboard_state() -> int:
     """
-    Refresh the dashboard state by reloading strategy data.
+    Refresh the dashboard state for display purposes.
 
     Also checks if a batch of trades is ready to be archived.
 
     Returns:
         The current trade count (after any archiving).
     """
-    # Don't recreate strategy - it resets in-memory state like last_lstm_train_date
-    # The strategy already loads from state file in __init__
-    # If we need fresh state, call _load_state() instead
-    if hasattr(st.session_state, 'strategy_1m'):
-        st.session_state.strategy_1m._load_state()
-    if hasattr(st.session_state, 'strategy_15m'):
-        st.session_state.strategy_15m._load_state()
-    if hasattr(st.session_state, 'strategy_scalp'):
-        st.session_state.strategy_scalp._load_state()
+    # NOTE: Do NOT call _load_state() here - it overwrites in-memory positions
+    # and causes duplicate Discord messages. Strategies manage their own state.
+    # The strategies load state once in __init__ and save after each trade.
 
     # Archive trades if batch is complete
     archive_trades_if_batch_complete()
@@ -616,13 +617,115 @@ def render_left_column() -> None:
 
 def render_right_column() -> None:
     """Render the right column with chat and trading logs."""
-    tab_chat, tab_logs = st.tabs(["💬 Snoogans Chat", "📜 Trading Logs"])
-    
+    tab_chat, tab_logs, tab_learner = st.tabs(["💬 Snoogans Chat", "📜 Trading Logs", "🧠 RL Learner"])
+
     with tab_chat:
         render_chat_interface(tab_chat)
-    
+
     with tab_logs:
         render_trading_logs()
+
+    with tab_learner:
+        render_learner_monitor()
+
+
+def render_learner_monitor() -> None:
+    """Render the RL Learner monitoring tab."""
+    if not LEARNER_AVAILABLE:
+        st.warning("Adaptive Learner not available")
+        return
+
+    learner = get_learner()
+    stats = learner.get_stats()
+    decisions = learner.get_decision_summary()
+
+    # Header metrics
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("States Learned", stats['total_states'])
+    col2.metric("Total Trades", stats['total_trades'])
+    col3.metric("Win Rate", f"{stats['win_rate']:.1f}%")
+    col4.metric("Epsilon", f"{stats['epsilon']:.1%}")
+
+    st.divider()
+
+    # Two columns for details
+    left, right = st.columns(2)
+
+    with left:
+        st.subheader("Learning Progress")
+        st.write(f"**Total P&L:** ${stats['total_pnl']:+.2f}")
+        st.write(f"**Avg P&L:** ${stats['avg_pnl']:+.2f}")
+        st.write(f"**Exploration Rate:** {stats['exploration_rate']*100:.1f}%")
+
+        st.subheader("Counterfactual Learning")
+        good_skips = stats.get('counterfactual_good_skips', 0)
+        bad_skips = stats.get('counterfactual_bad_skips', 0)
+        st.write(f"**Good Skips (avoided losses):** {good_skips}")
+        st.write(f"**Bad Skips (missed wins):** {bad_skips}")
+        skip_acc = stats.get('skip_accuracy', 0)
+        st.write(f"**Skip Accuracy:** {skip_acc:.1f}%")
+        st.write(f"**Pending Monitoring:** {stats.get('pending_counterfactuals', 0)}")
+
+    with right:
+        st.subheader("Best States to Trade")
+        best_states = learner.get_best_states(5)
+        if best_states:
+            best_data = []
+            for s in best_states:
+                parts = s['state'].split('|')
+                best_data.append({
+                    "Ticker": parts[0],
+                    "Trend": parts[1],
+                    "RSI": parts[2],
+                    "Hour": parts[3],
+                    "Q[enter]": s['q_enter'],
+                    "Advantage": s['advantage']
+                })
+            st.dataframe(pd.DataFrame(best_data), use_container_width=True, hide_index=True)
+        else:
+            st.info("No states learned yet")
+
+        st.subheader("States to Avoid")
+        worst_states = learner.get_worst_states(5)
+        if worst_states:
+            worst_data = []
+            for s in worst_states:
+                parts = s['state'].split('|')
+                worst_data.append({
+                    "Ticker": parts[0],
+                    "Trend": parts[1],
+                    "RSI": parts[2],
+                    "Hour": parts[3],
+                    "Q[enter]": s['q_enter'],
+                    "Advantage": s['advantage']
+                })
+            st.dataframe(pd.DataFrame(worst_data), use_container_width=True, hide_index=True)
+
+    # Recent decisions
+    st.divider()
+    st.subheader("Recent Decisions")
+
+    if decisions['total'] > 0:
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Enters", decisions['enters'], f"{decisions['enter_rate']:.0f}%")
+        col2.metric("Skips", decisions['skips'], f"{100-decisions['enter_rate']:.0f}%")
+        col3.metric("Explorations", decisions['explorations'], f"{decisions['exploration_rate']:.0f}%")
+
+        # Show last 10 decisions
+        recent = learner.get_recent_decisions(10)
+        if recent:
+            decision_data = []
+            for d in recent:
+                decision_data.append({
+                    "Time": d.get('timestamp', '')[:19],
+                    "State": d.get('state_key', ''),
+                    "Action": d.get('action', '').upper(),
+                    "Explore": "Yes" if d.get('exploration') else "No",
+                    "Reason": d.get('reason', '')[:30]
+                })
+            st.dataframe(pd.DataFrame(decision_data), use_container_width=True, hide_index=True)
+    else:
+        st.info("No decisions recorded yet - waiting for trades")
 
 
 def render_trading_logs() -> None:

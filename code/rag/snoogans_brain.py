@@ -891,3 +891,380 @@ Answer:"""
             parts.append(f"Live: WARNINGS - {', '.join(warnings)}")
 
         return " | ".join(parts)
+
+    def get_optimal_exits(self, ticker: str = None, trend: str = None,
+                          rsi_range: str = None, trade_type: str = None) -> dict:
+        """
+        Analyze historical trades matching pattern to determine optimal exit parameters.
+
+        Args:
+            ticker: Filter by ticker (SPY, QQQ, IWM)
+            trend: Filter by trend at entry (bull, bear)
+            rsi_range: Filter by RSI range (e.g., 'mid-high (50-60)')
+            trade_type: Filter by type (LONG_CALL, LONG_PUT, PUT_SPREAD, CALL_SPREAD)
+
+        Returns:
+            dict with:
+            - profit_target_pct: Suggested profit target (% of credit/debit)
+            - stop_loss_pct: Suggested stop loss (% of credit/debit)
+            - confidence: 0-100 based on sample size
+            - sample_size: Number of trades analyzed
+            - analysis: Detailed breakdown
+        """
+        trades = self._load_trade_batches()
+
+        if not trades:
+            return {
+                'profit_target_pct': 50.0,  # Default 50% profit
+                'stop_loss_pct': 100.0,     # Default 100% loss (2x credit)
+                'confidence': 0,
+                'sample_size': 0,
+                'analysis': 'No trade history available'
+            }
+
+        # Filter trades matching pattern
+        filtered = []
+        for trade in trades:
+            # Skip trades without learning metrics
+            if 'max_profit_pct' not in trade or 'exit_reason' not in trade:
+                continue
+
+            # Apply filters
+            if ticker and trade.get('ticker') != ticker:
+                continue
+
+            ctx = trade.get('market_context', {})
+            if trend and ctx.get('trend') != trend:
+                continue
+
+            if rsi_range:
+                rsi = ctx.get('rsi')
+                if rsi is None:
+                    continue
+                # Map RSI to range
+                if rsi < 30:
+                    t_rsi_range = 'oversold (<30)'
+                elif rsi < 40:
+                    t_rsi_range = 'low (30-40)'
+                elif rsi < 50:
+                    t_rsi_range = 'mid-low (40-50)'
+                elif rsi < 60:
+                    t_rsi_range = 'mid-high (50-60)'
+                elif rsi < 70:
+                    t_rsi_range = 'high (60-70)'
+                else:
+                    t_rsi_range = 'overbought (>70)'
+                if t_rsi_range != rsi_range:
+                    continue
+
+            if trade_type:
+                if 'is_call' in trade:
+                    t_type = 'LONG_CALL' if trade['is_call'] else 'LONG_PUT'
+                elif 'is_put' in trade:
+                    t_type = 'PUT_SPREAD' if trade['is_put'] else 'CALL_SPREAD'
+                else:
+                    continue
+                if t_type != trade_type:
+                    continue
+
+            filtered.append(trade)
+
+        sample_size = len(filtered)
+
+        if sample_size < 5:
+            return {
+                'profit_target_pct': 50.0,
+                'stop_loss_pct': 100.0,
+                'confidence': min(sample_size * 10, 40),
+                'sample_size': sample_size,
+                'analysis': f'Insufficient data ({sample_size} trades) - using defaults'
+            }
+
+        # Analyze winners vs losers
+        winners = [t for t in filtered if t.get('pnl', 0) > 0]
+        losers = [t for t in filtered if t.get('pnl', 0) < 0]
+
+        # Calculate optimal profit target
+        # Look at max_profit_pct of winners - where did they peak before exit?
+        if winners:
+            max_profits = [t.get('max_profit_pct', 0) for t in winners]
+            avg_max_profit = sum(max_profits) / len(max_profits)
+
+            # Also look at actual exit profit
+            actual_profits = []
+            for t in winners:
+                credit_or_debit = t.get('credit', t.get('debit', 1))
+                if credit_or_debit > 0:
+                    actual_pct = t.get('pnl', 0) / (credit_or_debit * t.get('contracts', 10) * 100) * 100
+                    actual_profits.append(actual_pct)
+
+            avg_actual_profit = sum(actual_profits) / len(actual_profits) if actual_profits else 0
+
+            # Money left on table
+            left_on_table = avg_max_profit - avg_actual_profit
+
+            # Suggest profit target that captures more of the max profit
+            # If leaving too much on table, lower the target slightly
+            if left_on_table > 20:
+                suggested_profit_target = max(30, avg_actual_profit - 10)
+            else:
+                suggested_profit_target = avg_actual_profit
+        else:
+            suggested_profit_target = 50.0
+            avg_max_profit = 0
+            left_on_table = 0
+
+        # Calculate optimal stop loss
+        # Look at max_drawdown_pct of losers - could we have cut losses earlier?
+        if losers:
+            max_drawdowns = [t.get('max_drawdown_pct', 0) for t in losers]
+            avg_max_drawdown = sum(max_drawdowns) / len(max_drawdowns)
+
+            # Look at exit reasons for losers
+            stop_loss_exits = [t for t in losers if t.get('exit_reason') == 'stop_loss']
+            time_exits = [t for t in losers if t.get('exit_reason') in ['time_exit', 'eod_force_close']]
+
+            # If many losers hit stop_loss, the stop is working
+            # If many losers exit via time with big drawdowns, stop should be tighter
+            if time_exits and len(time_exits) > len(stop_loss_exits):
+                # Too many losers running to time exit with big losses
+                suggested_stop_loss = max(50, avg_max_drawdown * 0.7)  # Tighten stop
+            else:
+                # Stop loss is catching most losers - keep similar
+                suggested_stop_loss = 100.0  # Default 2x credit
+        else:
+            suggested_stop_loss = 100.0
+            avg_max_drawdown = 0
+
+        # Calculate confidence based on sample size
+        confidence = min(100, sample_size * 4)  # 25 trades = 100% confidence
+
+        # Build analysis summary
+        analysis_parts = [
+            f"Analyzed {sample_size} trades",
+            f"Winners: {len(winners)}, Losers: {len(losers)}",
+            f"Win rate: {len(winners)/sample_size*100:.0f}%"
+        ]
+
+        if winners:
+            analysis_parts.append(f"Avg max profit seen: {avg_max_profit:.0f}%")
+            analysis_parts.append(f"Money left on table: {left_on_table:.0f}%")
+
+        if losers:
+            analysis_parts.append(f"Avg max drawdown: {avg_max_drawdown:.0f}%")
+
+        return {
+            'profit_target_pct': round(suggested_profit_target, 1),
+            'stop_loss_pct': round(suggested_stop_loss, 1),
+            'confidence': confidence,
+            'sample_size': sample_size,
+            'win_count': len(winners),
+            'loss_count': len(losers),
+            'avg_max_profit_seen': round(avg_max_profit, 1) if winners else 0,
+            'avg_max_drawdown_seen': round(avg_max_drawdown, 1) if losers else 0,
+            'left_on_table_pct': round(left_on_table, 1) if winners else 0,
+            'analysis': ' | '.join(analysis_parts)
+        }
+
+    def _normalize_features(self, features: dict) -> dict:
+        """
+        Normalize features to 0-1 scale for distance calculation.
+        """
+        normalized = {}
+
+        # RSI: 0-100 -> 0-1
+        if 'rsi' in features:
+            normalized['rsi'] = features['rsi'] / 100.0
+
+        # MACD line: typically -1 to +1, clamp and scale
+        if 'macd_line' in features:
+            normalized['macd_line'] = (max(-1, min(1, features['macd_line'])) + 1) / 2.0
+
+        # MACD signal: same as line
+        if 'macd_signal' in features:
+            normalized['macd_signal'] = (max(-1, min(1, features['macd_signal'])) + 1) / 2.0
+
+        # ATR: typically 0-5 for SPY, scale accordingly
+        if 'atr' in features:
+            normalized['atr'] = min(1.0, features['atr'] / 5.0)
+
+        # Trend strength: typically -1 to +1
+        if 'trend_strength' in features:
+            normalized['trend_strength'] = (max(-1, min(1, features['trend_strength'])) + 1) / 2.0
+
+        # Hour: 9-16 -> 0-1
+        if 'hour' in features:
+            normalized['hour'] = (features['hour'] - 9) / 7.0
+
+        # Trend: categorical -> one-hot encoding
+        if 'trend' in features:
+            trend = features['trend']
+            normalized['trend_bull'] = 1.0 if trend == 'bull' else 0.0
+            normalized['trend_bear'] = 1.0 if trend == 'bear' else 0.0
+
+        # MACD bull: boolean -> 0 or 1
+        if 'macd_bull' in features:
+            normalized['macd_bull_flag'] = 1.0 if features['macd_bull'] else 0.0
+
+        return normalized
+
+    def _euclidean_distance(self, f1: dict, f2: dict) -> float:
+        """
+        Calculate Euclidean distance between two normalized feature vectors.
+        """
+        common_keys = set(f1.keys()) & set(f2.keys())
+        if not common_keys:
+            return float('inf')
+
+        sum_sq = 0.0
+        for key in common_keys:
+            diff = f1[key] - f2[key]
+            sum_sq += diff * diff
+
+        return sum_sq ** 0.5
+
+    def find_similar_trades(self, features: dict, k: int = 10,
+                            max_history: int = 150) -> list:
+        """
+        Find k most similar historical trades using feature-based distance.
+
+        Args:
+            features: Current market context features
+            k: Number of similar trades to return
+            max_history: How many recent trades to consider
+
+        Returns:
+            List of (distance, trade) tuples sorted by similarity
+        """
+        trades = self._load_trade_batches()
+        if not trades:
+            return []
+
+        # Use most recent trades
+        recent_trades = trades[-max_history:]
+
+        # Normalize current features
+        normalized_current = self._normalize_features(features)
+
+        distances = []
+        for trade in recent_trades:
+            ctx = trade.get('market_context', {})
+            if not ctx:
+                continue
+
+            # Extract and normalize trade features
+            trade_features = self._normalize_features(ctx)
+
+            # Calculate distance
+            dist = self._euclidean_distance(normalized_current, trade_features)
+
+            if dist < float('inf'):
+                distances.append((dist, trade))
+
+        # Sort by distance (closest first)
+        distances.sort(key=lambda x: x[0])
+
+        return distances[:k]
+
+    def get_pattern_stats(self, similar_trades: list) -> dict:
+        """
+        Compute statistics from a list of similar trades.
+
+        Args:
+            similar_trades: List of (distance, trade) tuples from find_similar_trades()
+
+        Returns:
+            dict with win_rate, avg_pnl, pattern insights
+        """
+        if not similar_trades:
+            return None
+
+        # Extract just the trades
+        trades = [t for _, t in similar_trades]
+
+        wins = sum(1 for t in trades if t.get('pnl', 0) > 0)
+        losses = sum(1 for t in trades if t.get('pnl', 0) < 0)
+        total_pnl = sum(t.get('pnl', 0) for t in trades)
+        avg_pnl = total_pnl / len(trades)
+
+        # Get average distance (similarity)
+        avg_distance = sum(d for d, _ in similar_trades) / len(similar_trades)
+
+        # Analyze exit reasons
+        exit_reasons = defaultdict(int)
+        for t in trades:
+            reason = t.get('exit_reason', 'unknown')
+            exit_reasons[reason] += 1
+
+        # Find most common exit
+        most_common_exit = max(exit_reasons.items(), key=lambda x: x[1])[0] if exit_reasons else 'unknown'
+
+        # Average hold duration
+        hold_durations = [t.get('hold_duration_minutes', 0) for t in trades
+                        if 'hold_duration_minutes' in t]
+        avg_hold = sum(hold_durations) / len(hold_durations) if hold_durations else 0
+
+        return {
+            'sample_size': len(trades),
+            'win_rate': wins / len(trades) * 100,
+            'wins': wins,
+            'losses': losses,
+            'avg_pnl': round(avg_pnl, 2),
+            'total_pnl': round(total_pnl, 2),
+            'avg_similarity': round(1 - min(1, avg_distance), 2),  # Convert distance to similarity
+            'avg_hold_minutes': round(avg_hold, 1),
+            'common_exit': most_common_exit,
+            'exit_breakdown': dict(exit_reasons),
+            'confidence': min(100, len(trades) * 10)  # 10 trades = 100% confidence
+        }
+
+    def get_pattern_recommendation(self, features: dict, k: int = 10) -> dict:
+        """
+        Get trade recommendation based on similar historical patterns.
+
+        Args:
+            features: Current market context (rsi, macd_line, trend, etc.)
+            k: Number of similar trades to analyze
+
+        Returns:
+            dict with recommendation, confidence, and pattern analysis
+        """
+        similar = self.find_similar_trades(features, k=k)
+
+        if len(similar) < 3:
+            return {
+                'should_enter': True,  # Default to yes if insufficient data
+                'confidence': 0,
+                'reason': f"Insufficient similar patterns ({len(similar)} found)",
+                'pattern_stats': None
+            }
+
+        stats = self.get_pattern_stats(similar)
+
+        # Decision based on win rate and sample size
+        win_rate = stats['win_rate']
+        sample = stats['sample_size']
+
+        # Adjust threshold based on sample size
+        if sample >= 10:
+            threshold = 35  # Full confidence threshold
+        elif sample >= 5:
+            threshold = 30  # Lower threshold for smaller samples
+        else:
+            threshold = 25  # Very low threshold for minimal data
+
+        should_enter = win_rate >= threshold
+
+        # Build reason
+        if should_enter:
+            reason = f"Similar patterns: {win_rate:.0f}% win rate over {sample} trades (avg P&L ${stats['avg_pnl']:+.2f})"
+        else:
+            reason = f"Similar patterns underperform: {win_rate:.0f}% win rate over {sample} trades"
+
+        return {
+            'should_enter': should_enter,
+            'confidence': stats['confidence'],
+            'reason': reason,
+            'pattern_stats': stats,
+            'similar_trades_count': len(similar)
+        }

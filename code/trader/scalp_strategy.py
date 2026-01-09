@@ -16,8 +16,8 @@ from typing import Optional, Dict, Any, Tuple
 
 # Import your existing modules
 from code.data.data_client import data_client
-from indicators import get_trend_signal, _macd, _rsi
-from discord_notifier import send_scalp_entry, send_scalp_exit, set_strategy_ready, send_webhook
+from indicators import get_trend_signal, _macd, _rsi, get_full_indicator_set
+from discord_notifier import send_scalp_entry, send_scalp_exit, set_strategy_ready, send_webhook, is_ready
 
 # Import brain for trade decisions (optional - fails gracefully)
 try:
@@ -25,6 +25,13 @@ try:
     BRAIN_AVAILABLE = True
 except ImportError:
     BRAIN_AVAILABLE = False
+
+# Import adaptive learner for RL-based entry decisions
+try:
+    from code.rag.adaptive_learner import get_learner
+    LEARNER_AVAILABLE = True
+except ImportError:
+    LEARNER_AVAILABLE = False
 
 # Configure logging
 logging.basicConfig(
@@ -101,6 +108,16 @@ class ScalpStrategy:
             except Exception as e:
                 logger.warning(f"{self.prefix} Brain not available: {e}")
                 self.brain = None
+
+        # Initialize adaptive learner for RL-based entry decisions
+        self.learner = None
+        if LEARNER_AVAILABLE:
+            try:
+                self.learner = get_learner()
+                stats = self.learner.get_stats()
+                logger.info(f"{self.prefix} Adaptive learner loaded - {stats['total_states']} learned states")
+            except Exception as e:
+                logger.warning(f"{self.prefix} Adaptive learner not available: {e}")
 
         # Load state with error handling
         try:
@@ -204,15 +221,26 @@ class ScalpStrategy:
             'last_pnl_date': self.last_pnl_date,
             'closed_trades': self.closed_trades
         }
-        
+
+        def json_serializer(obj):
+            """Handle numpy types and other non-serializable objects"""
+            import numpy as np
+            if isinstance(obj, (np.bool_, np.integer)):
+                return int(obj)
+            if isinstance(obj, np.floating):
+                return float(obj)
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+            return str(obj)
+
         try:
             with self._state_lock():
                 # Write to temporary file first, then atomic rename
                 temp_file = STATE_FILE.with_suffix('.json.tmp')
                 with open(temp_file, 'w') as f:
-                    json.dump(state, f, indent=4, default=str)
+                    json.dump(state, f, indent=4, default=json_serializer)
                 temp_file.replace(STATE_FILE)
-                
+
         except Exception as e:
             logger.error(f"{self.prefix} Failed to save state: {e}", exc_info=True)
 
@@ -295,6 +323,83 @@ class ScalpStrategy:
         """Check if we should be more selective (daily PnL >= $1000)"""
         return self.daily_pnl >= 1000.0
 
+    def _get_adaptive_exits(self, ticker: str, is_call: bool, market_context: dict) -> dict:
+        """
+        Get adaptive exit parameters from brain based on pattern.
+        Returns default values if brain unavailable or insufficient data.
+        """
+        # Default exit parameters
+        defaults = {
+            'profit_target_pct': 20.0,  # 20% profit target
+            'stop_loss_pct': 15.0,      # 15% stop loss
+            'trail_activation_pct': 10.0,  # Activate trailing at 10%
+            'confidence': 0,
+            'source': 'default'
+        }
+
+        if not self.brain:
+            return defaults
+
+        try:
+            # Determine trade type
+            trade_type = 'LONG_CALL' if is_call else 'LONG_PUT'
+
+            # Get optimal exits from brain
+            optimal = self.brain.get_optimal_exits(
+                ticker=ticker,
+                trend=market_context.get('trend'),
+                trade_type=trade_type
+            )
+
+            # Only use brain values if confidence is high enough
+            if optimal.get('confidence', 0) >= 50 and optimal.get('sample_size', 0) >= 10:
+                return {
+                    'profit_target_pct': min(optimal.get('profit_target_pct', 20.0), 40.0),  # Cap at 40%
+                    'stop_loss_pct': min(optimal.get('stop_loss_pct', 15.0), 25.0),  # Cap at 25%
+                    'trail_activation_pct': max(8.0, optimal.get('profit_target_pct', 20.0) * 0.5),  # Half of target
+                    'confidence': optimal.get('confidence', 0),
+                    'source': 'brain',
+                    'analysis': optimal.get('analysis', '')
+                }
+
+            logger.debug(f"{self.prefix} [{ticker}] Brain exit data insufficient "
+                        f"(conf={optimal.get('confidence', 0)}, n={optimal.get('sample_size', 0)}) - using defaults")
+
+        except Exception as e:
+            logger.debug(f"{self.prefix} [{ticker}] Brain exit query failed: {e}")
+
+        return defaults
+
+    def _calculate_position_size(self, confidence: float = 50.0, win_rate: float = 50.0) -> int:
+        """
+        Scale position size 5-20 contracts based on:
+        - Brain confidence (0-100)
+        - Historical win rate for this pattern (0-100)
+        - Daily P&L (reduce size if losing, cap if winning big)
+        """
+        base = 5  # Minimum contracts
+
+        # Confidence scaling: 0-100 → 0-10 additional contracts
+        confidence_bonus = int(confidence / 10)
+
+        # Win rate scaling: 35-70% → 0-5 additional contracts
+        wr_bonus = max(0, int((win_rate - 35) / 7))
+
+        # Daily P&L cap adjustment
+        if self.daily_pnl < -500:
+            size_cap = 5  # Minimum only when losing badly
+        elif self.daily_pnl < 0:
+            size_cap = 10  # Reduced when in the red
+        elif self.daily_pnl > 1000:
+            size_cap = 15  # Conservative when up big (protect gains)
+        else:
+            size_cap = 20  # Full range available
+
+        calculated = min(base + confidence_bonus + wr_bonus, size_cap)
+        logger.debug(f"{self.prefix} Position size: {calculated} contracts "
+                    f"(conf={confidence:.0f}, wr={win_rate:.0f}%, cap={size_cap})")
+        return calculated
+
     def _cached_fetch(self, key: Tuple, fetch_func, ttl: int = 10):
         """Simple cache with TTL to reduce API calls"""
         now = time_mod.time()
@@ -351,7 +456,18 @@ class ScalpStrategy:
 
             # Manage existing positions
             self.manage_positions()
-            
+
+            # Update counterfactual tracking for RL learner
+            if self.learner:
+                try:
+                    # Expire old counterfactuals (resolved after 10 minutes)
+                    expired = self.learner.expire_old_counterfactuals(max_age_minutes=10)
+                    for cf in expired:
+                        logger.info(f"{self.prefix} Counterfactual resolved: {cf['ticker']} | "
+                                   f"Would have P&L: ${cf['would_have_pnl']:+.2f} | {cf['outcome']}")
+                except Exception as e:
+                    logger.debug(f"{self.prefix} Counterfactual update error: {e}")
+
             # Save state
             self._save_state()
             
@@ -404,14 +520,15 @@ class ScalpStrategy:
         # Entry logic
         if ticker not in self.positions:
             if self.can_enter_trades():
-                self._check_entry_conditions(ticker, trend, is_momentum_bull, rsi_value, chain, price, now)
+                self._check_entry_conditions(ticker, trend, is_momentum_bull, rsi_value, chain, price, now, bars)
             else:
                 logger.info(f"{self.prefix} [{ticker}] NO TRADE: Outside entry hours (9:31am-3pm ET)")
         else:
             logger.info(f"{self.prefix} [{ticker}] NO TRADE: Already have open position")
 
     def _check_entry_conditions(self, ticker: str, trend: str, is_momentum_bull: bool,
-                                rsi_value: float, chain: pd.DataFrame, price: float, now: datetime):
+                                rsi_value: float, chain: pd.DataFrame, price: float, now: datetime,
+                                bars: pd.DataFrame = None):
         """Check if entry conditions are met"""
 
         conservative = self.is_conservative_mode()
@@ -436,7 +553,10 @@ class ScalpStrategy:
                 logger.info(f"{self.prefix} [{ticker}] NO TRADE: Cooloff period after {last_dir} exit")
                 return
 
-        # Build market context for learning
+        # Get full indicator set for learning
+        indicators = get_full_indicator_set(bars) if bars is not None else {}
+
+        # Build enhanced market context for learning
         market_context = {
             "trend": trend,
             "rsi": round(rsi_value, 2),
@@ -445,6 +565,11 @@ class ScalpStrategy:
             "hour": now.hour,
             "day_of_week": now.strftime("%A"),
             "conservative_mode": conservative,
+            # Enhanced indicators for learning
+            "macd_line": indicators.get("macd_line", 0.0),
+            "macd_signal": indicators.get("macd_signal", 0.0),
+            "atr": indicators.get("atr", 0.0),
+            "trend_strength": indicators.get("trend_strength", 0.0),
         }
 
         # Conservative mode: Stricter RSI requirements
@@ -501,6 +626,26 @@ class ScalpStrategy:
                        market_context: Dict = None):
         """Attempt to enter a new ATM option position"""
 
+        # ============ POSITION CORRELATION LIMITS ============
+        # Block if we already have a position in the same direction
+        same_direction_count = sum(
+            1 for t, p in self.positions.items()
+            if p["is_call"] == is_call
+        )
+        if same_direction_count >= 1:
+            direction = "CALL (bullish)" if is_call else "PUT (bearish)"
+            logger.info(f"{self.prefix} [{ticker}] NO TRADE: Already have {same_direction_count} {direction} position(s) - avoiding correlated risk")
+            return
+
+        # Limit total open positions to 2
+        if len(self.positions) >= 2:
+            logger.info(f"{self.prefix} [{ticker}] NO TRADE: Max 2 positions reached ({list(self.positions.keys())})")
+            return
+
+        # Default confidence/win_rate if brain unavailable
+        brain_confidence = 50.0
+        brain_win_rate = 50.0
+
         # Query brain for trade recommendation if available
         if self.brain:
             try:
@@ -532,27 +677,84 @@ class ScalpStrategy:
                         return
 
                     hist = recommendation.get('historical_analysis', {})
-                    confidence = hist.get('confidence', 0)
-                    win_rate = hist.get('avg_win_rate', 0)
+                    brain_confidence = hist.get('confidence', 50.0)
+                    brain_win_rate = hist.get('avg_win_rate', 50.0)
 
                     # Conservative mode: require higher confidence and win rate
                     if self.is_conservative_mode():
                         min_confidence = 60
                         min_win_rate = 50
-                        if confidence < min_confidence or win_rate < min_win_rate:
+                        if brain_confidence < min_confidence or brain_win_rate < min_win_rate:
                             logger.info(f"{self.prefix} [{ticker}] NO TRADE (CONSERVATIVE): "
-                                       f"Brain confidence {confidence:.0f}% < {min_confidence}% or "
-                                       f"win rate {win_rate:.0f}% < {min_win_rate}%")
+                                       f"Brain confidence {brain_confidence:.0f}% < {min_confidence}% or "
+                                       f"win rate {brain_win_rate:.0f}% < {min_win_rate}%")
                             return
 
                     logger.info(f"{self.prefix} [{ticker}] Brain says ENTER: "
-                              f"Win rate: {win_rate:.0f}% | Confidence: {confidence:.0f}%")
+                              f"Win rate: {brain_win_rate:.0f}% | Confidence: {brain_confidence:.0f}%")
 
             except Exception as e:
                 if self.is_conservative_mode():
                     logger.info(f"{self.prefix} [{ticker}] NO TRADE (CONSERVATIVE): Brain unavailable - {e}")
                     return
                 logger.warning(f"{self.prefix} Brain query failed: {e} - proceeding with trade")
+
+        # RL-based entry decision using adaptive learner
+        learner_state_key = None
+        if self.learner and market_context:
+            try:
+                learner_state_key = self.learner.get_state_key(
+                    ticker=ticker,
+                    trend=market_context.get('trend', 'chop'),
+                    rsi=market_context.get('rsi', 50.0),
+                    hour=market_context.get('hour', 12),
+                    confidence=brain_confidence
+                )
+
+                rl_decision = self.learner.should_enter(learner_state_key, brain_win_rate)
+
+                if not rl_decision['should_enter']:
+                    logger.info(f"{self.prefix} [{ticker}] RL Learner says SKIP: {rl_decision['reason']}")
+                    # Don't completely block - only block if Q-values strongly favor skip
+                    q_vals = rl_decision.get('q_values', {})
+                    if q_vals.get('skip', 0) > q_vals.get('enter', 0) + 0.2:
+                        logger.info(f"{self.prefix} [{ticker}] Strong RL skip signal - blocking entry")
+                        # Track as counterfactual for learning
+                        try:
+                            atm_strike = round(price)
+                            type_col = next((c for c in ['type', 'contract_type', 'option_type']
+                                           if c in chain.columns), None)
+                            if type_col:
+                                target_type = 'call' if is_call else 'put'
+                                opts = chain[chain[type_col].str.lower() == target_type].copy()
+                                if 'strike_price' in opts.columns:
+                                    opts['strike_diff'] = abs(opts['strike_price'] - atm_strike)
+                                    atm_opt = opts.loc[opts['strike_diff'].idxmin()]
+                                    mark = (atm_opt.get('bid_price', 0) + atm_opt.get('ask_price', 0)) / 2
+                                    if mark > 0:
+                                        self.learner.track_skipped_trade(
+                                            ticker=ticker,
+                                            state_key=learner_state_key,
+                                            entry_price=mark,
+                                            strike=atm_strike,
+                                            is_call=is_call,
+                                            debit=mark,
+                                            contracts=10
+                                        )
+                                        logger.info(f"{self.prefix} [{ticker}] Tracking counterfactual: {target_type.upper()} @ ${mark:.2f}")
+                        except Exception as e:
+                            logger.debug(f"{self.prefix} [{ticker}] Could not track counterfactual: {e}")
+                        return
+                    else:
+                        logger.info(f"{self.prefix} [{ticker}] Weak RL skip - proceeding anyway")
+                else:
+                    if rl_decision.get('exploration'):
+                        logger.info(f"{self.prefix} [{ticker}] RL Learner: EXPLORATION entry")
+                    else:
+                        logger.info(f"{self.prefix} [{ticker}] RL Learner says ENTER: {rl_decision['reason']}")
+
+            except Exception as e:
+                logger.debug(f"{self.prefix} [{ticker}] RL learner error: {e}")
 
         try:
             # Find type column
@@ -584,7 +786,21 @@ class ScalpStrategy:
                 return
 
             strike_price = float(row[strike_col])
-            contracts = 10
+
+            # Calculate adaptive position size using brain confidence/win_rate
+            contracts = self._calculate_position_size(
+                confidence=brain_confidence,
+                win_rate=brain_win_rate
+            )
+
+            # Get adaptive exit parameters from brain
+            exit_params = self._get_adaptive_exits(ticker, is_call, market_context or {})
+
+            if exit_params.get('source') == 'brain':
+                logger.info(f"{self.prefix} [{ticker}] Using brain exits: "
+                           f"PT={exit_params['profit_target_pct']:.0f}%, "
+                           f"SL={exit_params['stop_loss_pct']:.0f}%, "
+                           f"Trail={exit_params['trail_activation_pct']:.0f}%")
 
             # Store position with market context for learning
             self.positions[ticker] = {
@@ -593,11 +809,18 @@ class ScalpStrategy:
                 "debit": debit,
                 "contracts": contracts,
                 "best_mark": debit,
+                "worst_mark": debit,  # Track worst for max drawdown
                 "trail_active": False,
                 "trail_level": None,
                 "entry_time": datetime.now(EST).isoformat(),
                 "chop_count": 0,
                 "market_context": market_context or {},
+                # Adaptive exit parameters
+                "profit_target_pct": exit_params['profit_target_pct'],
+                "stop_loss_pct": exit_params['stop_loss_pct'],
+                "trail_activation_pct": exit_params['trail_activation_pct'],
+                # RL learner state key for feedback
+                "learner_state_key": learner_state_key,
             }
 
             # Send notification
@@ -612,7 +835,7 @@ class ScalpStrategy:
                 logger.error(f"{self.prefix} Failed to send entry notification: {e}")
 
             logger.info(f"{self.prefix} ENTRY: {ticker} LONG ATM {'CALL' if is_call else 'PUT'} "
-                       f"{strike_price:.1f} @ ${debit:.2f}")
+                       f"{strike_price:.1f} @ ${debit:.2f} x{contracts}")
             
         except Exception as e:
             logger.error(f"{self.prefix} [{ticker}] Entry error: {e}", exc_info=True)
@@ -720,32 +943,41 @@ class ScalpStrategy:
                 pos["trail_level"] = pos["best_mark"] * 0.95  # 5% trail
                 logger.info(f"{self.prefix} [{ticker}] Trail → ${pos['trail_level']:.2f}")
 
-        # ============ TIGHT SCALP EXIT LOGIC ============
+        # Update worst mark for drawdown tracking
+        if mark < pos.get("worst_mark", mark):
+            pos["worst_mark"] = mark
+
+        # ============ ADAPTIVE SCALP EXIT LOGIC ============
         realized = None
         exit_reason = None
+
+        # Get adaptive exit parameters (with defaults for backward compatibility)
+        profit_target = pos.get("profit_target_pct", 20.0) / 100.0  # Convert to decimal
+        stop_loss = pos.get("stop_loss_pct", 15.0) / 100.0
+        trail_activation = pos.get("trail_activation_pct", 10.0) / 100.0
 
         # 1. QUICK SCALP: +8% in first 2 minutes = take profit
         if profit_pct >= 0.08 and hold_minutes <= 2:
             realized = (mark - debit) * pos["contracts"] * 100
             exit_reason = f"Quick scalp +{profit_pct*100:.0f}% in {hold_minutes:.1f}m"
 
-        # 2. PROFIT TARGET: 20% (reduced from 40%)
-        elif profit_pct >= 0.20:
+        # 2. PROFIT TARGET (adaptive)
+        elif profit_pct >= profit_target:
             realized = (mark - debit) * pos["contracts"] * 100
-            exit_reason = f"Profit target +{profit_pct*100:.0f}%"
+            exit_reason = f"Profit target +{profit_pct*100:.0f}% (target: {profit_target*100:.0f}%)"
 
         # 3. TRAILING STOP HIT
         elif pos["trail_active"] and mark <= pos["trail_level"]:
             realized = (mark - debit) * pos["contracts"] * 100
             exit_reason = f"Trail stop @ ${pos['trail_level']:.2f}"
 
-        # 4. TIGHT STOP: 15% loss (reduced from 30%)
-        elif profit_pct <= -0.15:
+        # 4. STOP LOSS (adaptive)
+        elif profit_pct <= -stop_loss:
             realized = (mark - debit) * pos["contracts"] * 100
-            exit_reason = f"Stop loss {profit_pct*100:.0f}%"
+            exit_reason = f"Stop loss {profit_pct*100:.0f}% (limit: {-stop_loss*100:.0f}%)"
 
-        # 5. TIME DECAY STOP: After 5min, tighten to 10% loss
-        elif hold_minutes > 5 and profit_pct <= -0.10:
+        # 5. TIME DECAY STOP: After 5min, tighten stop by 30%
+        elif hold_minutes > 5 and profit_pct <= -(stop_loss * 0.7):
             realized = (mark - debit) * pos["contracts"] * 100
             exit_reason = f"Time decay stop {profit_pct*100:.0f}% after {hold_minutes:.0f}m"
 
@@ -794,15 +1026,16 @@ class ScalpStrategy:
             realized = -debit * pos["contracts"] * 100
             exit_reason = "Option worthless"
 
-        # 13. ACTIVATE TRAILING: 10% profit starts 5% trail (earlier activation)
-        if realized is None and profit_pct >= 0.10 and not pos["trail_active"]:
+        # 13. ACTIVATE TRAILING (adaptive): profit >= trail_activation starts 5% trail
+        if realized is None and profit_pct >= trail_activation and not pos["trail_active"]:
             pos["trail_active"] = True
             pos["trail_level"] = pos["best_mark"] * 0.95
-            logger.info(f"{self.prefix} [{ticker}] +10% - 5% trail active @ ${pos['trail_level']:.2f}")
-            try:
-                send_webhook(f"**TRAIL** {ticker} +{profit_pct*100:.0f}% → 5% trail @ ${pos['trail_level']:.2f}")
-            except:
-                pass
+            logger.info(f"{self.prefix} [{ticker}] +{profit_pct*100:.0f}% (≥{trail_activation*100:.0f}%) - 5% trail active @ ${pos['trail_level']:.2f}")
+            if is_ready():
+                try:
+                    send_webhook(f"**TRAIL** {ticker} +{profit_pct*100:.0f}% → 5% trail @ ${pos['trail_level']:.2f}")
+                except:
+                    pass
 
         # Execute exit
         if realized is not None:
@@ -811,10 +1044,11 @@ class ScalpStrategy:
                        f"P&L: ${realized:+.2f} ({profit_pct*100:+.1f}%) | "
                        f"Hold: {hold_minutes:.1f}m | "
                        f"Trend: {trend} | RSI: {rsi_value:.0f} | MACD Bull: {macd_bull}")
-            self.exit_position(ticker, pos, realized, mark)
+            self.exit_position(ticker, pos, realized, mark, exit_reason)
 
-    def exit_position(self, ticker: str, pos: Dict, realized_pnl: float, final_mark: float):
-        """Close a position and update state"""
+    def exit_position(self, ticker: str, pos: Dict, realized_pnl: float, final_mark: float,
+                      exit_reason: str = "unknown"):
+        """Close a position and update state with learning metrics"""
         try:
             # Update P&L and equity (scalp strategy only - no cross-contamination)
             self.daily_pnl += realized_pnl
@@ -822,6 +1056,27 @@ class ScalpStrategy:
 
             # Update shared equity (single source of truth)
             update_shared_equity(realized_pnl)
+
+            # Calculate learning metrics
+            debit = pos["debit"]
+            best_mark = pos.get("best_mark", debit)
+            worst_mark = pos.get("worst_mark", debit)
+            entry_time_str = pos.get("entry_time", "unknown")
+
+            # Max profit seen (best_mark - debit) / debit * 100 (for long options)
+            max_profit_pct = ((best_mark - debit) / debit * 100) if debit > 0 else 0.0
+
+            # Max drawdown seen (debit - worst_mark) / debit * 100
+            max_drawdown_pct = ((debit - worst_mark) / debit * 100) if debit > 0 else 0.0
+
+            # Hold duration in minutes
+            hold_duration_minutes = 0.0
+            if entry_time_str != "unknown":
+                try:
+                    entry_dt = datetime.fromisoformat(entry_time_str)
+                    hold_duration_minutes = (datetime.now(EST) - entry_dt).total_seconds() / 60.0
+                except:
+                    pass
 
             # Send exit notification
             try:
@@ -835,23 +1090,47 @@ class ScalpStrategy:
             except Exception as e:
                 logger.error(f"{self.prefix} Failed to send exit notification: {e}")
 
+            # Enhanced exit logging with indicators
+            market_ctx = pos.get("market_context", {})
             logger.info(f"{self.prefix} EXIT: {ticker} LONG {'CALL' if pos['is_call'] else 'PUT'} "
-                       f"{pos['strike_price']:.1f} | P&L: ${realized_pnl:+.2f} (mark ${final_mark:.2f})")
+                       f"{pos['strike_price']:.1f} | P&L: ${realized_pnl:+.2f} | Reason: {exit_reason} | "
+                       f"Entry: ${debit:.2f} → Exit: ${final_mark:.2f} | "
+                       f"RSI: {market_ctx.get('rsi', 'N/A')} | Trend: {market_ctx.get('trend', 'N/A')}")
 
-            # Archive closed trade with market context for learning
+            # Archive closed trade with market context and learning metrics
             closed_trade = {
                 "ticker": ticker,
                 "is_call": pos["is_call"],
                 "strike_price": pos["strike_price"],
                 "debit": pos["debit"],
                 "pnl": realized_pnl,
-                "entry_time": pos["entry_time"],
+                "entry_time": entry_time_str,
                 "exit_time": datetime.now(EST).isoformat(),
-                "market_context": pos.get("market_context", {}),
+                "market_context": market_ctx,
+                # Learning metrics
+                "exit_reason": exit_reason,
+                "max_profit_pct": round(max_profit_pct, 2),
+                "max_drawdown_pct": round(max_drawdown_pct, 2),
+                "hold_duration_minutes": round(hold_duration_minutes, 1),
             }
-            
+
             self.closed_trades.append(closed_trade)
             self._save_individual_trade(closed_trade)
+
+            # Update RL learner with trade outcome
+            learner_state_key = pos.get("learner_state_key")
+            if self.learner and learner_state_key:
+                try:
+                    # Normalize P&L to reward: max_risk is debit * contracts * 100
+                    max_risk = debit * pos.get("contracts", 10) * 100
+                    self.learner.record_trade_outcome(
+                        state_key=learner_state_key,
+                        pnl=realized_pnl,
+                        max_risk=max_risk
+                    )
+                    logger.debug(f"{self.prefix} [{ticker}] Updated RL learner with P&L=${realized_pnl:+.2f}")
+                except Exception as e:
+                    logger.debug(f"{self.prefix} [{ticker}] RL learner update failed: {e}")
 
             # Remove position and set exit cooloff
             del self.positions[ticker]

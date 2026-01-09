@@ -1,0 +1,57 @@
+{
+  "q_table": {
+    "QQQ|bull|high|mid_morning|medium": {
+      "enter": 0.08105263157894738,
+      "skip": 0.0
+    },
+    "SPY|bear|mid|mid_morning|medium": {
+      "enter": 0.052235168740233213,
+      "skip": 0.02775
+    },
+    "SPY|bear|low|mid_morning|medium": {
+      "enter": 0.04740736185983828,
+      "skip": 0.0
+    },
+    "QQQ|bear|mid|mid_morning|medium": {
+      "enter": 0.05947096041531474,
+      "skip": 0.0
+    },
+    "IWM|bear|low|mid_morning|medium": {
+      "enter": 0.07858136520737327,
+      "skip": 0.0
+    },
+    "QQQ|bear|low|mid_morning|medium": {
+      "enter": 0.09553719008264464,
+      "skip": 0.0
+    },
+    "QQQ|bull|mid|mid_morning|medium": {
+      "enter": 0.21105725190839694,
+      "skip": 0.0
+    },
+    "SPY|bull|high|mid_morning|medium": {
+      "enter": 0.07219512195121952,
+      "skip": 0.0
+    },
+    "QQQ|bull|mid|early|medium": {
+      "enter": 0.34975,
+      "skip": -0.0225
+    },
+    "IWM|bull|mid|early|medium": {
+      "enter": -0.035,
+      "skip": 0.0
+    }
+  },
+  "stats": {
+    "total_trades": 18,
+    "total_skips": 0,
+    "enter_wins": 9,
+    "enter_losses": 9,
+    "total_pnl": -154.9999999999999,
+    "exploration_count": 0,
+    "exploitation_count": 0,
+    "counterfactual_good_skips": 2,
+    "counterfactual_bad_skips": 1
+  },
+  "epsilon": 0.18274497720251864,
+  "saved_at": "2026-01-08T22:39:11.014370"
+}
