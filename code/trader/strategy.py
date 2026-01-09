@@ -778,11 +778,17 @@ class TradingStrategy:
                 logger.info(f"{self.prefix} [{ticker}] 50% profit - trailing stop "
                           f"activated @ ${pos['trail_level']:.2f}")
 
-            # Check if trailing stop hit
-            if current_value >= pos["trail_level"]:
-                realized = (credit - current_value) * pos["contracts"] * 100
-                exit_reason = "trailing_stop"
-                logger.info(f"{self.prefix} [{ticker}] Trailing stop hit")
+        # 4. Check trailing stop (must be OUTSIDE the 50% profit condition)
+        if pos["trail_active"] and current_value >= pos["trail_level"]:
+            realized = (credit - current_value) * pos["contracts"] * 100
+            exit_reason = "trailing_stop"
+            logger.info(f"{self.prefix} [{ticker}] Trailing stop hit")
+
+        # 5. Hard profit target: 80% of credit (take profits, let winners run but cap)
+        if realized is None and (credit - current_value) >= 0.8 * credit:
+            realized = (credit - current_value) * pos["contracts"] * 100
+            exit_reason = "profit_target_80"
+            logger.info(f"{self.prefix} [{ticker}] 80% profit target hit - taking profits")
 
         # Exit if any condition triggered
         if realized is not None:

@@ -330,8 +330,8 @@ class ScalpStrategy:
         """
         # Default exit parameters
         defaults = {
-            'profit_target_pct': 20.0,  # 20% profit target
-            'stop_loss_pct': 15.0,      # 15% stop loss
+            'profit_target_pct': 80.0,  # 80% profit target (let winners run, trail stop protects)
+            'stop_loss_pct': 20.0,      # 20% stop loss
             'trail_activation_pct': 10.0,  # Activate trailing at 10%
             'confidence': 0,
             'source': 'default'
@@ -354,9 +354,9 @@ class ScalpStrategy:
             # Only use brain values if confidence is high enough
             if optimal.get('confidence', 0) >= 50 and optimal.get('sample_size', 0) >= 10:
                 return {
-                    'profit_target_pct': min(optimal.get('profit_target_pct', 20.0), 40.0),  # Cap at 40%
+                    'profit_target_pct': min(optimal.get('profit_target_pct', 80.0), 100.0),  # Cap at 100%
                     'stop_loss_pct': min(optimal.get('stop_loss_pct', 15.0), 25.0),  # Cap at 25%
-                    'trail_activation_pct': max(8.0, optimal.get('profit_target_pct', 20.0) * 0.5),  # Half of target
+                    'trail_activation_pct': max(8.0, min(optimal.get('profit_target_pct', 80.0) * 0.15, 15.0)),  # 15% of target, max 15%
                     'confidence': optimal.get('confidence', 0),
                     'source': 'brain',
                     'analysis': optimal.get('analysis', '')
@@ -495,8 +495,18 @@ class ScalpStrategy:
 
             macd_line, macd_signal = _macd(bars['close'])  # Returns (float, float)
             is_momentum_bull = macd_line > macd_signal
-            
+
+            # Current RSI
             rsi_value = _rsi(bars['close'])  # Returns a single float
+
+            # RSI momentum: compare current to 3 bars ago for direction
+            rsi_prev = _rsi(bars['close'].iloc[:-3]) if len(bars) > 17 else rsi_value
+            rsi_rising = rsi_value > rsi_prev + 1  # Rising if up by at least 1 point
+            rsi_falling = rsi_value < rsi_prev - 1  # Falling if down by at least 1 point
+
+            # MACD momentum: is MACD line itself positive/negative (not just vs signal)
+            macd_bullish = macd_line > 0
+
             price = bars['close'].iloc[-1]
 
         except Exception as e:
@@ -515,12 +525,16 @@ class ScalpStrategy:
             return
 
         logger.debug(f"{self.prefix} [{ticker}] Price: ${price:.2f} | Trend: {trend} | "
-                    f"MACD Bull: {is_momentum_bull} | RSI: {rsi_value:.2f}")
+                    f"MACD Bull: {is_momentum_bull} | MACD+: {macd_bullish} | "
+                    f"RSI: {rsi_value:.1f} | RSI↑: {rsi_rising} | RSI↓: {rsi_falling}")
 
         # Entry logic
         if ticker not in self.positions:
             if self.can_enter_trades():
-                self._check_entry_conditions(ticker, trend, is_momentum_bull, rsi_value, chain, price, now, bars)
+                self._check_entry_conditions(
+                    ticker, trend, is_momentum_bull, rsi_value, chain, price, now, bars,
+                    rsi_rising=rsi_rising, rsi_falling=rsi_falling, macd_bullish=macd_bullish
+                )
             else:
                 logger.info(f"{self.prefix} [{ticker}] NO TRADE: Outside entry hours (9:31am-3pm ET)")
         else:
@@ -528,8 +542,9 @@ class ScalpStrategy:
 
     def _check_entry_conditions(self, ticker: str, trend: str, is_momentum_bull: bool,
                                 rsi_value: float, chain: pd.DataFrame, price: float, now: datetime,
-                                bars: pd.DataFrame = None):
-        """Check if entry conditions are met"""
+                                bars: pd.DataFrame = None, rsi_rising: bool = False,
+                                rsi_falling: bool = False, macd_bullish: bool = False):
+        """Check if entry conditions are met - EARLY ENTRY LOGIC"""
 
         conservative = self.is_conservative_mode()
         if conservative:
@@ -548,7 +563,7 @@ class ScalpStrategy:
         # Check cooloff period after opposite direction exit
         if ticker in self.last_exit:
             last_dir, last_time = self.last_exit[ticker]
-            cooloff_minutes = 10 if conservative else 5  # Longer cooloff in conservative mode
+            cooloff_minutes = 10 if conservative else 3  # Reduced from 5 to 3 for faster re-entry
             if (now - last_time) < timedelta(minutes=cooloff_minutes) and new_dir != last_dir:
                 logger.info(f"{self.prefix} [{ticker}] NO TRADE: Cooloff period after {last_dir} exit")
                 return
@@ -560,7 +575,10 @@ class ScalpStrategy:
         market_context = {
             "trend": trend,
             "rsi": round(rsi_value, 2),
+            "rsi_rising": rsi_rising,
+            "rsi_falling": rsi_falling,
             "macd_bull": is_momentum_bull,
+            "macd_bullish": macd_bullish,
             "price": round(price, 2),
             "hour": now.hour,
             "day_of_week": now.strftime("%A"),
@@ -572,40 +590,87 @@ class ScalpStrategy:
             "trend_strength": indicators.get("trend_strength", 0.0),
         }
 
-        # Conservative mode: Stricter RSI requirements
+        # ============ EARLY ENTRY LOGIC ============
+        # Goal: Enter BEFORE all lagging indicators confirm, catch moves earlier
+        #
+        # BULL ENTRY CONDITIONS (any ONE of these triggers entry):
+        #   1. STANDARD: trend=bull + MACD crossed + RSI > 45 (lowered from 50)
+        #   2. EARLY MOMENTUM: trend=bull + RSI rising + RSI > 40 + MACD line positive
+        #   3. STRONG TREND: trend=bull + RSI > 55 (strong momentum, don't wait for MACD)
+        #
+        # BEAR ENTRY CONDITIONS (mirror logic):
+        #   1. STANDARD: trend=bear + MACD crossed + RSI < 55 (raised from 50)
+        #   2. EARLY MOMENTUM: trend=bear + RSI falling + RSI < 60 + MACD line negative
+        #   3. STRONG TREND: trend=bear + RSI < 45 (strong momentum, don't wait for MACD)
+
+        # Conservative mode: Still require stricter conditions but with adjusted thresholds
         if conservative:
-            # Bull: RSI must be 55-70 (strong but not overbought)
-            # Bear: RSI must be 30-45 (weak but not oversold)
-            if trend == "bull" and not (55 <= rsi_value <= 70):
-                logger.info(f"{self.prefix} [{ticker}] NO TRADE (CONSERVATIVE): Bull RSI {rsi_value:.1f} not in 55-70 range")
+            if trend == "bull" and not (50 <= rsi_value <= 70):
+                logger.info(f"{self.prefix} [{ticker}] NO TRADE (CONSERVATIVE): Bull RSI {rsi_value:.1f} not in 50-70 range")
                 return
-            if trend == "bear" and not (30 <= rsi_value <= 45):
-                logger.info(f"{self.prefix} [{ticker}] NO TRADE (CONSERVATIVE): Bear RSI {rsi_value:.1f} not in 30-45 range")
+            if trend == "bear" and not (30 <= rsi_value <= 50):
+                logger.info(f"{self.prefix} [{ticker}] NO TRADE (CONSERVATIVE): Bear RSI {rsi_value:.1f} not in 30-50 range")
                 return
 
-        # Bull entry conditions
-        if trend == "bull" and is_momentum_bull and rsi_value > 50:
-            self._attempt_entry(ticker, True, chain, price, market_context)
-        elif trend == "bull":
-            # Bull trend but other conditions not met
-            reasons = []
-            if not is_momentum_bull:
-                reasons.append("MACD bearish")
-            if rsi_value <= 50:
-                reasons.append(f"RSI too low ({rsi_value:.1f})")
-            logger.info(f"{self.prefix} [{ticker}] NO TRADE: Bull trend but {', '.join(reasons)}")
+        # ============ BULL ENTRY ============
+        if trend == "bull":
+            entry_reason = None
 
-        # Bear entry conditions
-        elif trend == "bear" and not is_momentum_bull and rsi_value < 50:
-            self._attempt_entry(ticker, False, chain, price, market_context)
+            # 1. STRONG TREND: RSI > 55 = strong momentum, enter immediately
+            if rsi_value > 55:
+                entry_reason = f"STRONG TREND (RSI {rsi_value:.1f} > 55)"
+
+            # 2. EARLY MOMENTUM: RSI rising toward 50 + MACD line positive
+            elif rsi_rising and rsi_value > 40 and macd_bullish:
+                entry_reason = f"EARLY MOMENTUM (RSI↑ {rsi_value:.1f}, MACD+)"
+
+            # 3. STANDARD: MACD crossed + RSI > 45 (lowered threshold)
+            elif is_momentum_bull and rsi_value > 45:
+                entry_reason = f"STANDARD (MACD crossed, RSI {rsi_value:.1f} > 45)"
+
+            if entry_reason:
+                logger.info(f"{self.prefix} [{ticker}] BULL ENTRY: {entry_reason}")
+                self._attempt_entry(ticker, True, chain, price, market_context)
+            else:
+                # Log why we didn't enter
+                reasons = []
+                if rsi_value <= 55:
+                    reasons.append(f"RSI {rsi_value:.1f} ≤ 55 (not strong)")
+                if not (rsi_rising and rsi_value > 40 and macd_bullish):
+                    reasons.append("no early momentum signal")
+                if not (is_momentum_bull and rsi_value > 45):
+                    reasons.append("MACD not crossed or RSI ≤ 45")
+                logger.info(f"{self.prefix} [{ticker}] NO TRADE: Bull trend but {'; '.join(reasons)}")
+
+        # ============ BEAR ENTRY ============
         elif trend == "bear":
-            # Bear trend but other conditions not met
-            reasons = []
-            if is_momentum_bull:
-                reasons.append("MACD bullish")
-            if rsi_value >= 50:
-                reasons.append(f"RSI too high ({rsi_value:.1f})")
-            logger.info(f"{self.prefix} [{ticker}] NO TRADE: Bear trend but {', '.join(reasons)}")
+            entry_reason = None
+
+            # 1. STRONG TREND: RSI < 45 = strong bearish momentum, enter immediately
+            if rsi_value < 45:
+                entry_reason = f"STRONG TREND (RSI {rsi_value:.1f} < 45)"
+
+            # 2. EARLY MOMENTUM: RSI falling toward 50 + MACD line negative
+            elif rsi_falling and rsi_value < 60 and not macd_bullish:
+                entry_reason = f"EARLY MOMENTUM (RSI↓ {rsi_value:.1f}, MACD-)"
+
+            # 3. STANDARD: MACD crossed bearish + RSI < 55 (raised threshold)
+            elif not is_momentum_bull and rsi_value < 55:
+                entry_reason = f"STANDARD (MACD crossed, RSI {rsi_value:.1f} < 55)"
+
+            if entry_reason:
+                logger.info(f"{self.prefix} [{ticker}] BEAR ENTRY: {entry_reason}")
+                self._attempt_entry(ticker, False, chain, price, market_context)
+            else:
+                # Log why we didn't enter
+                reasons = []
+                if rsi_value >= 45:
+                    reasons.append(f"RSI {rsi_value:.1f} ≥ 45 (not strong)")
+                if not (rsi_falling and rsi_value < 60 and not macd_bullish):
+                    reasons.append("no early momentum signal")
+                if not (not is_momentum_bull and rsi_value < 55):
+                    reasons.append("MACD not crossed or RSI ≥ 55")
+                logger.info(f"{self.prefix} [{ticker}] NO TRADE: Bear trend but {'; '.join(reasons)}")
 
     def _get_option_mark(self, row: pd.Series) -> Optional[float]:
         """Calculate mid-market option price"""
@@ -823,19 +888,22 @@ class ScalpStrategy:
                 "learner_state_key": learner_state_key,
             }
 
-            # Send notification
-            try:
-                send_scalp_entry(
-                    is_call=is_call,
-                    strike=strike_price,
-                    debit=debit * contracts * 100,
-                    underlying=ticker
-                )
-            except Exception as e:
-                logger.error(f"{self.prefix} Failed to send entry notification: {e}")
+            # Send notification ONLY if position was successfully stored
+            if ticker in self.positions:
+                try:
+                    send_scalp_entry(
+                        is_call=is_call,
+                        strike=strike_price,
+                        debit=debit * contracts * 100,
+                        underlying=ticker
+                    )
+                except Exception as e:
+                    logger.error(f"{self.prefix} Failed to send entry notification: {e}")
 
-            logger.info(f"{self.prefix} ENTRY: {ticker} LONG ATM {'CALL' if is_call else 'PUT'} "
-                       f"{strike_price:.1f} @ ${debit:.2f} x{contracts}")
+                logger.info(f"{self.prefix} ENTRY: {ticker} LONG ATM {'CALL' if is_call else 'PUT'} "
+                           f"{strike_price:.1f} @ ${debit:.2f} x{contracts}")
+            else:
+                logger.error(f"{self.prefix} [{ticker}] Position storage failed - notification blocked")
             
         except Exception as e:
             logger.error(f"{self.prefix} [{ticker}] Entry error: {e}", exc_info=True)

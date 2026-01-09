@@ -41,6 +41,7 @@ class AppConfig:
     STRATEGY_15M_REFRESH_SECONDS: int = 900
     STRATEGY_15M_MONITOR_SECONDS: int = 60  # Position monitoring between full cycles
     STRATEGY_SCALP_REFRESH_SECONDS: int = 60
+    LEARNER_REFRESH_SECONDS: int = 60
 
     CHAT_BOX_HEIGHT: int = 280
     EQUITY_CHART_HEIGHT: int = 160
@@ -661,20 +662,27 @@ def render_chat_interface(container: Any) -> None:
 def render_left_column() -> None:
     """Render the left column with performance and positions."""
     st.subheader("Performance & Position")
-    
+
     st.line_chart(
         pd.Series(st.session_state.strategy_1m.equity_history, name="Equity"),
         height=CONFIG.EQUITY_CHART_HEIGHT,
     )
-    
-    with st.container(border=True):
-        render_positions(
-            st.session_state.strategy_1m,
-            "1m",
-            "Scanning SPY / QQQ / IWM for .30 Delta setups...",
-        )
-        render_positions(st.session_state.strategy_15m, "15m")
-        render_positions_scalp()
+
+    # Position display with auto-refresh
+    position_placeholder = st.empty()
+
+    @st.fragment(run_every=CONFIG.HEADER_REFRESH_SECONDS)
+    def update_positions():
+        with position_placeholder.container(border=True):
+            render_positions(
+                st.session_state.strategy_1m,
+                "1m",
+                "Scanning SPY / QQQ / IWM for .30 Delta setups...",
+            )
+            render_positions(st.session_state.strategy_15m, "15m")
+            render_positions_scalp()
+
+    update_positions()
 
 
 def render_right_column() -> None:
@@ -697,77 +705,85 @@ def render_learner_monitor() -> None:
         st.warning("Adaptive Learner not available")
         return
 
-    learner = get_learner()
-    stats = learner.get_stats()
-    decisions = learner.get_decision_summary()
+    # Learner display with auto-refresh
+    learner_placeholder = st.empty()
 
-    # Compact header metrics in a single row
-    col1, col2, col3, col4, col5, col6 = st.columns(6)
-    col1.metric("States", stats['total_states'])
-    col2.metric("Trades", stats['total_trades'])
-    col3.metric("Win %", f"{stats['win_rate']:.0f}%")
-    col4.metric("P&L", f"${stats['total_pnl']:+.0f}")
-    col5.metric("Epsilon", f"{stats['epsilon']:.0%}")
-    good_skips = stats.get('counterfactual_good_skips', 0)
-    bad_skips = stats.get('counterfactual_bad_skips', 0)
-    col6.metric("Skips", f"{good_skips}/{good_skips+bad_skips}")
+    @st.fragment(run_every=CONFIG.LEARNER_REFRESH_SECONDS)
+    def update_learner():
+        with learner_placeholder.container():
+            learner = get_learner()
+            stats = learner.get_stats()
+            decisions = learner.get_decision_summary()
 
-    # Two columns with expanders
-    left, right = st.columns(2)
+            # Compact header metrics in a single row
+            col1, col2, col3, col4, col5, col6 = st.columns(6)
+            col1.metric("States", stats['total_states'])
+            col2.metric("Trades", stats['total_trades'])
+            col3.metric("Win %", f"{stats['win_rate']:.0f}%")
+            col4.metric("P&L", f"${stats['total_pnl']:+.0f}")
+            col5.metric("Epsilon", f"{stats['epsilon']:.0%}")
+            good_skips = stats.get('counterfactual_good_skips', 0)
+            bad_skips = stats.get('counterfactual_bad_skips', 0)
+            col6.metric("Skips", f"{good_skips}/{good_skips+bad_skips}")
 
-    with left:
-        with st.expander("Best States to Trade", expanded=True):
-            best_states = learner.get_best_states(5)
-            if best_states:
-                best_data = []
-                for s in best_states:
-                    parts = s['state'].split('|')
-                    best_data.append({
-                        "Tkr": parts[0],
-                        "Trend": parts[1],
-                        "RSI": parts[2],
-                        "Q": f"{s['q_enter']:+.3f}"
-                    })
-                st.dataframe(pd.DataFrame(best_data), use_container_width=True, hide_index=True, height=150)
-            else:
-                st.caption("No states learned yet")
+            # Two columns with expanders
+            left, right = st.columns(2)
 
-    with right:
-        with st.expander("States to Avoid", expanded=True):
-            worst_states = learner.get_worst_states(5)
-            if worst_states:
-                worst_data = []
-                for s in worst_states:
-                    parts = s['state'].split('|')
-                    worst_data.append({
-                        "Tkr": parts[0],
-                        "Trend": parts[1],
-                        "RSI": parts[2],
-                        "Q": f"{s['q_enter']:+.3f}"
-                    })
-                st.dataframe(pd.DataFrame(worst_data), use_container_width=True, hide_index=True, height=150)
+            with left:
+                with st.expander("Best States to Trade", expanded=True):
+                    best_states = learner.get_best_states(5)
+                    if best_states:
+                        best_data = []
+                        for s in best_states:
+                            parts = s['state'].split('|')
+                            best_data.append({
+                                "Tkr": parts[0],
+                                "Trend": parts[1],
+                                "RSI": parts[2],
+                                "Q": f"{s['q_enter']:+.3f}"
+                            })
+                        st.dataframe(pd.DataFrame(best_data), use_container_width=True, hide_index=True, height=150)
+                    else:
+                        st.caption("No states learned yet")
 
-    # Recent decisions in expander
-    with st.expander("Recent Decisions", expanded=False):
-        if decisions['total'] > 0:
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Enters", decisions['enters'], f"{decisions['enter_rate']:.0f}%")
-            col2.metric("Skips", decisions['skips'], f"{100-decisions['enter_rate']:.0f}%")
-            col3.metric("Explores", decisions['explorations'], f"{decisions['exploration_rate']:.0f}%")
+            with right:
+                with st.expander("States to Avoid", expanded=True):
+                    worst_states = learner.get_worst_states(5)
+                    if worst_states:
+                        worst_data = []
+                        for s in worst_states:
+                            parts = s['state'].split('|')
+                            worst_data.append({
+                                "Tkr": parts[0],
+                                "Trend": parts[1],
+                                "RSI": parts[2],
+                                "Q": f"{s['q_enter']:+.3f}"
+                            })
+                        st.dataframe(pd.DataFrame(worst_data), use_container_width=True, hide_index=True, height=150)
 
-            recent = learner.get_recent_decisions(10)
-            if recent:
-                decision_data = []
-                for d in recent:
-                    decision_data.append({
-                        "Time": d.get('timestamp', '')[-8:],
-                        "State": d.get('state_key', '')[:25],
-                        "Action": d.get('action', '').upper(),
-                        "Exp": "Y" if d.get('exploration') else ""
-                    })
-                st.dataframe(pd.DataFrame(decision_data), use_container_width=True, hide_index=True, height=200)
-        else:
-            st.caption("No decisions yet")
+            # Recent decisions in expander
+            with st.expander("Recent Decisions", expanded=False):
+                if decisions['total'] > 0:
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric("Enters", decisions['enters'], f"{decisions['enter_rate']:.0f}%")
+                    col2.metric("Skips", decisions['skips'], f"{100-decisions['enter_rate']:.0f}%")
+                    col3.metric("Explores", decisions['explorations'], f"{decisions['exploration_rate']:.0f}%")
+
+                    recent = learner.get_recent_decisions(10)
+                    if recent:
+                        decision_data = []
+                        for d in recent:
+                            decision_data.append({
+                                "Time": d.get('timestamp', '')[-8:],
+                                "State": d.get('state_key', '')[:25],
+                                "Action": d.get('action', '').upper(),
+                                "Exp": "Y" if d.get('exploration') else ""
+                            })
+                        st.dataframe(pd.DataFrame(decision_data), use_container_width=True, hide_index=True, height=200)
+                else:
+                    st.caption("No decisions yet")
+
+    update_learner()
 
 
 def render_trading_logs() -> None:
