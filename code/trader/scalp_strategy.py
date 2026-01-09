@@ -614,11 +614,16 @@ class ScalpStrategy:
 
         # ============ BULL ENTRY ============
         if trend == "bull":
+            # RSI > 60 = overbought, don't enter calls (too late in the move)
+            if rsi_value > 60:
+                logger.info(f"{self.prefix} [{ticker}] NO TRADE: RSI {rsi_value:.1f} > 60 (overbought, too late for calls)")
+                return
+
             entry_reason = None
 
-            # 1. STRONG TREND: RSI > 55 = strong momentum, enter immediately
+            # 1. STRONG TREND: RSI 55-60 = strong momentum, enter immediately
             if rsi_value > 55:
-                entry_reason = f"STRONG TREND (RSI {rsi_value:.1f} > 55)"
+                entry_reason = f"STRONG TREND (RSI {rsi_value:.1f} in 55-60 range)"
 
             # 2. EARLY MOMENTUM: RSI rising toward 50 + MACD line positive
             elif rsi_rising and rsi_value > 40 and macd_bullish:
@@ -644,11 +649,16 @@ class ScalpStrategy:
 
         # ============ BEAR ENTRY ============
         elif trend == "bear":
+            # RSI < 40 = oversold, don't enter puts (too late in the move)
+            if rsi_value < 40:
+                logger.info(f"{self.prefix} [{ticker}] NO TRADE: RSI {rsi_value:.1f} < 40 (oversold, too late for puts)")
+                return
+
             entry_reason = None
 
-            # 1. STRONG TREND: RSI < 45 = strong bearish momentum, enter immediately
+            # 1. STRONG TREND: RSI 40-45 = strong bearish momentum, enter immediately
             if rsi_value < 45:
-                entry_reason = f"STRONG TREND (RSI {rsi_value:.1f} < 45)"
+                entry_reason = f"STRONG TREND (RSI {rsi_value:.1f} in 40-45 range)"
 
             # 2. EARLY MOMENTUM: RSI falling toward 50 + MACD line negative
             elif rsi_falling and rsi_value < 60 and not macd_bullish:
