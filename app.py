@@ -42,8 +42,8 @@ class AppConfig:
     STRATEGY_15M_MONITOR_SECONDS: int = 60  # Position monitoring between full cycles
     STRATEGY_SCALP_REFRESH_SECONDS: int = 60
 
-    CHAT_BOX_HEIGHT: int = 360
-    EQUITY_CHART_HEIGHT: int = 230
+    CHAT_BOX_HEIGHT: int = 280
+    EQUITY_CHART_HEIGHT: int = 160
 
     RAG_CHUNK_SIZE: int = 400
     RAG_CHUNK_OVERLAP: int = 150
@@ -150,9 +150,71 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    .block-container { padding-top: 3.5rem; padding-bottom: 0rem; max-width: 98%; }
-    div[data-testid="stVerticalBlock"] { gap: 0.4rem; }
-    .stMetric { background-color: #1e1e1e; padding: 10px; border-radius: 5px; }
+    /* Main container - tighter padding */
+    .block-container {
+        padding-top: 1rem;
+        padding-bottom: 0rem;
+        padding-left: 1rem;
+        padding-right: 1rem;
+        max-width: 100%;
+    }
+
+    /* Reduce gaps between elements */
+    div[data-testid="stVerticalBlock"] { gap: 0.3rem; }
+
+    /* Compact metrics */
+    .stMetric {
+        background-color: #1e1e1e;
+        padding: 8px;
+        border-radius: 5px;
+    }
+    [data-testid="stMetricValue"] { font-size: 1.2rem; }
+    [data-testid="stMetricLabel"] { font-size: 0.75rem; }
+
+    /* Compact dataframes */
+    .stDataFrame { font-size: 0.85rem; }
+    [data-testid="stDataFrame"] > div { max-height: 200px; overflow-y: auto; }
+
+    /* Tabs - compact */
+    .stTabs [data-baseweb="tab-list"] { gap: 4px; }
+    .stTabs [data-baseweb="tab"] { padding: 6px 12px; font-size: 0.85rem; }
+
+    /* Code blocks - scrollable with max height */
+    .stCodeBlock { max-height: 250px; overflow-y: auto; }
+    pre { font-size: 0.75rem !important; }
+
+    /* Subheaders - smaller */
+    h3 { font-size: 1rem !important; margin-bottom: 0.3rem !important; }
+    h2 { font-size: 1.1rem !important; margin-bottom: 0.3rem !important; }
+
+    /* Charts - responsive height */
+    [data-testid="stVegaLiteChart"] { max-height: 180px; }
+
+    /* Expanders - compact */
+    .streamlit-expanderHeader { font-size: 0.85rem; padding: 0.4rem; }
+
+    /* Progress bar - thinner */
+    .stProgress > div > div { height: 8px; }
+
+    /* Responsive columns - stack on smaller screens */
+    @media (max-width: 1200px) {
+        [data-testid="column"] {
+            width: 100% !important;
+            flex: 1 1 100% !important;
+        }
+    }
+
+    /* Hide hamburger menu for more space */
+    #MainMenu { visibility: hidden; }
+    footer { visibility: hidden; }
+    header { visibility: hidden; }
+
+    /* Scrollable containers */
+    .scrollable-container {
+        max-height: 300px;
+        overflow-y: auto;
+        overflow-x: hidden;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -639,93 +701,73 @@ def render_learner_monitor() -> None:
     stats = learner.get_stats()
     decisions = learner.get_decision_summary()
 
-    # Header metrics
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("States Learned", stats['total_states'])
-    col2.metric("Total Trades", stats['total_trades'])
-    col3.metric("Win Rate", f"{stats['win_rate']:.1f}%")
-    col4.metric("Epsilon", f"{stats['epsilon']:.1%}")
+    # Compact header metrics in a single row
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
+    col1.metric("States", stats['total_states'])
+    col2.metric("Trades", stats['total_trades'])
+    col3.metric("Win %", f"{stats['win_rate']:.0f}%")
+    col4.metric("P&L", f"${stats['total_pnl']:+.0f}")
+    col5.metric("Epsilon", f"{stats['epsilon']:.0%}")
+    good_skips = stats.get('counterfactual_good_skips', 0)
+    bad_skips = stats.get('counterfactual_bad_skips', 0)
+    col6.metric("Skips", f"{good_skips}/{good_skips+bad_skips}")
 
-    st.divider()
-
-    # Two columns for details
+    # Two columns with expanders
     left, right = st.columns(2)
 
     with left:
-        st.subheader("Learning Progress")
-        st.write(f"**Total P&L:** ${stats['total_pnl']:+.2f}")
-        st.write(f"**Avg P&L:** ${stats['avg_pnl']:+.2f}")
-        st.write(f"**Exploration Rate:** {stats['exploration_rate']*100:.1f}%")
-
-        st.subheader("Counterfactual Learning")
-        good_skips = stats.get('counterfactual_good_skips', 0)
-        bad_skips = stats.get('counterfactual_bad_skips', 0)
-        st.write(f"**Good Skips (avoided losses):** {good_skips}")
-        st.write(f"**Bad Skips (missed wins):** {bad_skips}")
-        skip_acc = stats.get('skip_accuracy', 0)
-        st.write(f"**Skip Accuracy:** {skip_acc:.1f}%")
-        st.write(f"**Pending Monitoring:** {stats.get('pending_counterfactuals', 0)}")
+        with st.expander("Best States to Trade", expanded=True):
+            best_states = learner.get_best_states(5)
+            if best_states:
+                best_data = []
+                for s in best_states:
+                    parts = s['state'].split('|')
+                    best_data.append({
+                        "Tkr": parts[0],
+                        "Trend": parts[1],
+                        "RSI": parts[2],
+                        "Q": f"{s['q_enter']:+.3f}"
+                    })
+                st.dataframe(pd.DataFrame(best_data), use_container_width=True, hide_index=True, height=150)
+            else:
+                st.caption("No states learned yet")
 
     with right:
-        st.subheader("Best States to Trade")
-        best_states = learner.get_best_states(5)
-        if best_states:
-            best_data = []
-            for s in best_states:
-                parts = s['state'].split('|')
-                best_data.append({
-                    "Ticker": parts[0],
-                    "Trend": parts[1],
-                    "RSI": parts[2],
-                    "Hour": parts[3],
-                    "Q[enter]": s['q_enter'],
-                    "Advantage": s['advantage']
-                })
-            st.dataframe(pd.DataFrame(best_data), use_container_width=True, hide_index=True)
+        with st.expander("States to Avoid", expanded=True):
+            worst_states = learner.get_worst_states(5)
+            if worst_states:
+                worst_data = []
+                for s in worst_states:
+                    parts = s['state'].split('|')
+                    worst_data.append({
+                        "Tkr": parts[0],
+                        "Trend": parts[1],
+                        "RSI": parts[2],
+                        "Q": f"{s['q_enter']:+.3f}"
+                    })
+                st.dataframe(pd.DataFrame(worst_data), use_container_width=True, hide_index=True, height=150)
+
+    # Recent decisions in expander
+    with st.expander("Recent Decisions", expanded=False):
+        if decisions['total'] > 0:
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Enters", decisions['enters'], f"{decisions['enter_rate']:.0f}%")
+            col2.metric("Skips", decisions['skips'], f"{100-decisions['enter_rate']:.0f}%")
+            col3.metric("Explores", decisions['explorations'], f"{decisions['exploration_rate']:.0f}%")
+
+            recent = learner.get_recent_decisions(10)
+            if recent:
+                decision_data = []
+                for d in recent:
+                    decision_data.append({
+                        "Time": d.get('timestamp', '')[-8:],
+                        "State": d.get('state_key', '')[:25],
+                        "Action": d.get('action', '').upper(),
+                        "Exp": "Y" if d.get('exploration') else ""
+                    })
+                st.dataframe(pd.DataFrame(decision_data), use_container_width=True, hide_index=True, height=200)
         else:
-            st.info("No states learned yet")
-
-        st.subheader("States to Avoid")
-        worst_states = learner.get_worst_states(5)
-        if worst_states:
-            worst_data = []
-            for s in worst_states:
-                parts = s['state'].split('|')
-                worst_data.append({
-                    "Ticker": parts[0],
-                    "Trend": parts[1],
-                    "RSI": parts[2],
-                    "Hour": parts[3],
-                    "Q[enter]": s['q_enter'],
-                    "Advantage": s['advantage']
-                })
-            st.dataframe(pd.DataFrame(worst_data), use_container_width=True, hide_index=True)
-
-    # Recent decisions
-    st.divider()
-    st.subheader("Recent Decisions")
-
-    if decisions['total'] > 0:
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Enters", decisions['enters'], f"{decisions['enter_rate']:.0f}%")
-        col2.metric("Skips", decisions['skips'], f"{100-decisions['enter_rate']:.0f}%")
-        col3.metric("Explorations", decisions['explorations'], f"{decisions['exploration_rate']:.0f}%")
-
-        # Show last 10 decisions
-        recent = learner.get_recent_decisions(10)
-        if recent:
-            decision_data = []
-            for d in recent:
-                decision_data.append({
-                    "Time": d.get('timestamp', '')[:19],
-                    "State": d.get('state_key', ''),
-                    "Action": d.get('action', '').upper(),
-                    "Explore": "Yes" if d.get('exploration') else "No",
-                    "Reason": d.get('reason', '')[:30]
-                })
-            st.dataframe(pd.DataFrame(decision_data), use_container_width=True, hide_index=True)
-    else:
-        st.info("No decisions recorded yet - waiting for trades")
+            st.caption("No decisions yet")
 
 
 def render_trading_logs() -> None:
