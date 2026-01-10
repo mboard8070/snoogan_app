@@ -41,7 +41,7 @@ async def get_dashboard_state():
 
 @router.post("/ask")
 async def ask_snoogans(question: dict):
-    reply = brain.ask_general(question["question"])  # or use your router logic
+    reply = brain.ask(question["question"])  # Smart router handles temporal, RAG, and general
     return {"reply": reply}
 
 # Optional: WebSocket for real-time logs (highly recommended)

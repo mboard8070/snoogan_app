@@ -255,24 +255,20 @@ ROUTER_CHAIN = get_router_chain()
 
 def get_snoogans_response(question: str) -> str:
     """
-    Route a question through the appropriate handler based on classification.
-    
+    Route a question through the brain's smart router.
+
+    Handles:
+        - Temporal queries (today, yesterday, this week, etc.)
+        - Trade/strategy questions (uses RAG)
+        - General chat
+
     Args:
         question: The user's question to process.
-        
+
     Returns:
-        The response from either RAG or general knowledge.
+        The response from the appropriate handler.
     """
-    try:
-        classification = ROUTER_CHAIN.invoke({"question": question}).strip().upper()
-    except Exception:
-        classification = "GENERAL"
-    
-    if "MANIFESTO" in classification:
-        st.toast("Query classified as **MANIFESTO**. Using RAG context.")
-        return RAG_BRAIN.ask_rag(question)
-    
-    return RAG_BRAIN.ask_general(question)
+    return RAG_BRAIN.ask(question)
 
 
 # =============================================================================
