@@ -592,6 +592,7 @@ class AdaptiveLearner:
                 "q_table": dict(self.q_table),
                 "stats": self.stats,
                 "epsilon": self.epsilon,
+                "decision_history": self.decision_history[-self.max_history:],
                 "saved_at": datetime.now().isoformat()
             }
 
@@ -624,8 +625,12 @@ class AdaptiveLearner:
             # Restore epsilon
             self.epsilon = state.get("epsilon", self.epsilon)
 
+            # Restore decision history
+            self.decision_history = state.get("decision_history", [])
+
             logger.info(f"Loaded learner state: {len(self.q_table)} states, "
-                       f"{self.stats['total_trades']} trades, epsilon={self.epsilon:.3f}")
+                       f"{self.stats['total_trades']} trades, epsilon={self.epsilon:.3f}, "
+                       f"{len(self.decision_history)} recent decisions")
 
         except Exception as e:
             logger.error(f"Failed to load learner state: {e}")
@@ -643,6 +648,7 @@ class AdaptiveLearner:
             "exploitation_count": 0,
         }
         self.epsilon = 0.20
+        self.decision_history = []
 
         if STATE_FILE.exists():
             STATE_FILE.unlink()

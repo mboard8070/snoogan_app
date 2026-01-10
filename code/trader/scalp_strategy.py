@@ -16,7 +16,7 @@ from typing import Optional, Dict, Any, Tuple
 
 # Import your existing modules
 from code.data.data_client import data_client
-from indicators import get_trend_signal, _macd, _rsi, get_full_indicator_set
+from indicators import get_trend_signal, _macd, _rsi, get_full_indicator_set, get_kst_momentum
 from discord_notifier import send_scalp_entry, send_scalp_exit, set_strategy_ready, send_webhook, is_ready
 
 # Import brain for trade decisions (optional - fails gracefully)
@@ -509,6 +509,12 @@ class ScalpStrategy:
 
             price = bars['close'].iloc[-1]
 
+            # KST momentum (ThinkOrSwim style - 2 consecutive bars of direction)
+            kst_data = get_kst_momentum(bars['close'])
+            kst_rising = kst_data['kst_rising']
+            kst_falling = kst_data['kst_falling']
+            kst_direction = kst_data['kst_direction']
+
         except Exception as e:
             logger.error(f"{self.prefix} [{ticker}] Error calculating indicators: {e}")
             return
@@ -526,14 +532,16 @@ class ScalpStrategy:
 
         logger.debug(f"{self.prefix} [{ticker}] Price: ${price:.2f} | Trend: {trend} | "
                     f"MACD Bull: {is_momentum_bull} | MACD+: {macd_bullish} | "
-                    f"RSI: {rsi_value:.1f} | RSI↑: {rsi_rising} | RSI↓: {rsi_falling}")
+                    f"RSI: {rsi_value:.1f} | RSI↑: {rsi_rising} | RSI↓: {rsi_falling} | "
+                    f"KST: {kst_direction}")
 
         # Entry logic
         if ticker not in self.positions:
             if self.can_enter_trades():
                 self._check_entry_conditions(
                     ticker, trend, is_momentum_bull, rsi_value, chain, price, now, bars,
-                    rsi_rising=rsi_rising, rsi_falling=rsi_falling, macd_bullish=macd_bullish
+                    rsi_rising=rsi_rising, rsi_falling=rsi_falling, macd_bullish=macd_bullish,
+                    kst_rising=kst_rising, kst_falling=kst_falling
                 )
             else:
                 logger.info(f"{self.prefix} [{ticker}] NO TRADE: Outside entry hours (9:31am-3pm ET)")
@@ -543,8 +551,9 @@ class ScalpStrategy:
     def _check_entry_conditions(self, ticker: str, trend: str, is_momentum_bull: bool,
                                 rsi_value: float, chain: pd.DataFrame, price: float, now: datetime,
                                 bars: pd.DataFrame = None, rsi_rising: bool = False,
-                                rsi_falling: bool = False, macd_bullish: bool = False):
-        """Check if entry conditions are met - EARLY ENTRY LOGIC"""
+                                rsi_falling: bool = False, macd_bullish: bool = False,
+                                kst_rising: bool = False, kst_falling: bool = False):
+        """Check if entry conditions are met - EARLY ENTRY LOGIC with KST filter"""
 
         conservative = self.is_conservative_mode()
         if conservative:
@@ -619,6 +628,16 @@ class ScalpStrategy:
                 logger.info(f"{self.prefix} [{ticker}] NO TRADE: RSI {rsi_value:.1f} > 60 (overbought, too late for calls)")
                 return
 
+            # RSI falling = momentum fading, don't enter calls against momentum
+            if rsi_falling:
+                logger.info(f"{self.prefix} [{ticker}] NO TRADE: RSI falling (momentum fading, don't buy calls)")
+                return
+
+            # KST filter: require 2 consecutive bars of rising KST for calls (ThinkOrSwim logic)
+            if not kst_rising:
+                logger.info(f"{self.prefix} [{ticker}] NO TRADE: KST not rising (need 2 bars of bullish momentum)")
+                return
+
             entry_reason = None
 
             # 1. STRONG TREND: RSI 55-60 = strong momentum, enter immediately
@@ -652,6 +671,16 @@ class ScalpStrategy:
             # RSI < 40 = oversold, don't enter puts (too late in the move)
             if rsi_value < 40:
                 logger.info(f"{self.prefix} [{ticker}] NO TRADE: RSI {rsi_value:.1f} < 40 (oversold, too late for puts)")
+                return
+
+            # RSI rising = momentum reversing, don't enter puts against momentum
+            if rsi_rising:
+                logger.info(f"{self.prefix} [{ticker}] NO TRADE: RSI rising (momentum reversing, don't buy puts)")
+                return
+
+            # KST filter: require 2 consecutive bars of falling KST for puts (ThinkOrSwim logic)
+            if not kst_falling:
+                logger.info(f"{self.prefix} [{ticker}] NO TRADE: KST not falling (need 2 bars of bearish momentum)")
                 return
 
             entry_reason = None

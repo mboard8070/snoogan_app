@@ -65,6 +65,91 @@ def _atr(df: pd.DataFrame, period: int = 14) -> float:
     return tr.rolling(window=period).mean().iloc[-1]
 
 
+def _kst(series: pd.Series) -> pd.Series:
+    """
+    Calculate KST (Know Sure Thing) indicator.
+    KST combines multiple Rate of Change indicators smoothed with SMAs.
+
+    Formula (ThinkOrSwim default):
+    - ROC1 = 10-period ROC smoothed with 10-period SMA, weight 1
+    - ROC2 = 15-period ROC smoothed with 10-period SMA, weight 2
+    - ROC3 = 20-period ROC smoothed with 10-period SMA, weight 3
+    - ROC4 = 30-period ROC smoothed with 15-period SMA, weight 4
+    - KST = (ROC1 * 1) + (ROC2 * 2) + (ROC3 * 3) + (ROC4 * 4)
+    """
+    if series is None or len(series) < 45:  # Need enough bars for longest lookback
+        return pd.Series([0.0] * len(series) if series is not None else [0.0])
+
+    # Rate of Change calculations
+    roc1 = ((series / series.shift(10)) - 1) * 100
+    roc2 = ((series / series.shift(15)) - 1) * 100
+    roc3 = ((series / series.shift(20)) - 1) * 100
+    roc4 = ((series / series.shift(30)) - 1) * 100
+
+    # Smooth each ROC with SMA
+    sroc1 = roc1.rolling(window=10).mean()
+    sroc2 = roc2.rolling(window=10).mean()
+    sroc3 = roc3.rolling(window=10).mean()
+    sroc4 = roc4.rolling(window=15).mean()
+
+    # Weighted sum
+    kst = (sroc1 * 1) + (sroc2 * 2) + (sroc3 * 3) + (sroc4 * 4)
+
+    return kst
+
+
+def get_kst_momentum(series: pd.Series) -> dict:
+    """
+    Get KST momentum direction for entry filtering.
+
+    Matches ThinkOrSwim logic:
+    - CALL entry: KST rising for 2 consecutive bars (KST[1] > KST[2] > KST[3])
+    - PUT entry: KST falling for 2 consecutive bars (KST[1] < KST[2] < KST[3])
+
+    Returns dict with:
+        - kst_current: current KST value
+        - kst_rising: True if KST rising for 2 bars (bullish)
+        - kst_falling: True if KST falling for 2 bars (bearish)
+        - kst_direction: 'rising', 'falling', or 'choppy'
+    """
+    kst = _kst(series)
+
+    if len(kst) < 4 or kst.isna().iloc[-1]:
+        return {
+            'kst_current': 0.0,
+            'kst_rising': False,
+            'kst_falling': False,
+            'kst_direction': 'choppy'
+        }
+
+    # Get last 4 KST values (current and 3 bars back)
+    kst_1 = kst.iloc[-1]  # Most recent (current bar)
+    kst_2 = kst.iloc[-2]  # 1 bar ago
+    kst_3 = kst.iloc[-3]  # 2 bars ago
+    kst_4 = kst.iloc[-4]  # 3 bars ago
+
+    # ThinkOrSwim logic: 2 consecutive bars of momentum
+    # Rising: KST[2] > KST[3] AND KST[1] > KST[2]
+    kst_rising = (kst_2 > kst_3) and (kst_1 > kst_2)
+
+    # Falling: KST[2] < KST[3] AND KST[1] < KST[2]
+    kst_falling = (kst_2 < kst_3) and (kst_1 < kst_2)
+
+    if kst_rising:
+        direction = 'rising'
+    elif kst_falling:
+        direction = 'falling'
+    else:
+        direction = 'choppy'
+
+    return {
+        'kst_current': round(kst_1, 4),
+        'kst_rising': kst_rising,
+        'kst_falling': kst_falling,
+        'kst_direction': direction
+    }
+
+
 def _extract_features(bars: pd.DataFrame, lookback: int = 60) -> dict:
     """
     Extract features for XGBoost from price bars.
