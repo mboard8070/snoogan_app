@@ -4,7 +4,8 @@ import os
 import json
 import shutil
 import stat
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 from collections import defaultdict
 
 # Import indicators for real-time analysis (optional - fails gracefully)
@@ -746,6 +747,169 @@ Answer:"""
             | self.llm
             | StrOutputParser()
         )
+
+    def _parse_date_reference(self, question: str) -> tuple:
+        """
+        Parse temporal references in a question.
+
+        Returns:
+            (start_date, end_date, time_description) or (None, None, None) if no temporal reference
+        """
+        question_lower = question.lower()
+        today = datetime.now().date()
+
+        # Today
+        if any(word in question_lower for word in ['today', "today's", 'this morning', 'this afternoon']):
+            return (today, today, 'today')
+
+        # Yesterday
+        if 'yesterday' in question_lower:
+            yesterday = today - timedelta(days=1)
+            return (yesterday, yesterday, 'yesterday')
+
+        # This week
+        if 'this week' in question_lower:
+            start_of_week = today - timedelta(days=today.weekday())
+            return (start_of_week, today, 'this week')
+
+        # Last week
+        if 'last week' in question_lower:
+            start_of_last_week = today - timedelta(days=today.weekday() + 7)
+            end_of_last_week = start_of_last_week + timedelta(days=4)  # Friday
+            return (start_of_last_week, end_of_last_week, 'last week')
+
+        # Last N days
+        match = re.search(r'last\s+(\d+)\s+days?', question_lower)
+        if match:
+            days = int(match.group(1))
+            start = today - timedelta(days=days)
+            return (start, today, f'last {days} days')
+
+        # Specific day of week (e.g., "on Friday", "Monday's trades")
+        days_of_week = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']
+        for i, day in enumerate(days_of_week):
+            if day in question_lower:
+                # Find the most recent occurrence of that day
+                days_back = (today.weekday() - i) % 7
+                if days_back == 0 and 'last' in question_lower:
+                    days_back = 7
+                target_date = today - timedelta(days=days_back)
+                return (target_date, target_date, day.capitalize())
+
+        return (None, None, None)
+
+    def _filter_trades_by_date(self, trades: list, start_date, end_date) -> list:
+        """Filter trades to those within the date range."""
+        filtered = []
+        for trade in trades:
+            entry_time = trade.get('entry_time', '')
+            if not entry_time:
+                continue
+
+            try:
+                if 'T' in entry_time:
+                    trade_date = datetime.fromisoformat(entry_time.replace('Z', '+00:00')).date()
+                else:
+                    continue
+
+                if start_date <= trade_date <= end_date:
+                    filtered.append(trade)
+            except (ValueError, TypeError):
+                continue
+
+        return filtered
+
+    def _format_trades_summary(self, trades: list, time_desc: str) -> str:
+        """Format a summary of trades for the LLM context."""
+        if not trades:
+            return f"No trades found for {time_desc}."
+
+        # Calculate stats
+        total_pnl = sum(t.get('pnl', 0) for t in trades)
+        wins = sum(1 for t in trades if t.get('pnl', 0) > 0)
+        losses = sum(1 for t in trades if t.get('pnl', 0) < 0)
+        win_rate = (wins / len(trades) * 100) if trades else 0
+
+        summary = f"TRADES FOR {time_desc.upper()}\n"
+        summary += f"Total Trades: {len(trades)}\n"
+        summary += f"Wins: {wins} | Losses: {losses} | Win Rate: {win_rate:.1f}%\n"
+        summary += f"Total P&L: ${total_pnl:+.2f}\n\n"
+
+        summary += "TRADE DETAILS:\n"
+        for trade in trades:
+            ticker = trade.get('ticker', '???')
+            pnl = trade.get('pnl', 0)
+            entry = trade.get('entry_time', '')[:16] if trade.get('entry_time') else '???'
+
+            # Determine trade type
+            if 'is_call' in trade:
+                direction = 'CALL' if trade['is_call'] else 'PUT'
+                strike = trade.get('strike_price', 0)
+                desc = f"LONG {direction} @ {strike}"
+            elif 'is_put' in trade:
+                direction = 'PUT SPREAD' if trade['is_put'] else 'CALL SPREAD'
+                short = trade.get('short', 0)
+                long = trade.get('long', 0)
+                desc = f"{direction} {short}/{long}"
+            else:
+                desc = "UNKNOWN"
+
+            result = "WIN" if pnl > 0 else "LOSS" if pnl < 0 else "BE"
+            exit_reason = trade.get('exit_reason', '')
+
+            summary += f"  {entry} | {ticker} {desc} | ${pnl:+.2f} ({result})"
+            if exit_reason:
+                summary += f" | Exit: {exit_reason}"
+            summary += "\n"
+
+        return summary
+
+    def ask(self, question: str) -> str:
+        """
+        Smart query router that handles temporal queries and general questions.
+
+        - Temporal queries (today, yesterday, this week): Filter trades and analyze
+        - Trade/manifesto questions: Use RAG
+        - General chat: Use general LLM
+        """
+        question_lower = question.lower()
+
+        # Check for temporal reference
+        start_date, end_date, time_desc = self._parse_date_reference(question)
+
+        if start_date is not None:
+            # Temporal query - filter trades and build focused context
+            trades = self._load_trade_batches()
+            filtered_trades = self._filter_trades_by_date(trades, start_date, end_date)
+            trade_context = self._format_trades_summary(filtered_trades, time_desc)
+
+            # Use LLM with focused trade context
+            temporal_template = """You are Snoogans — Red Bank degenerate 0DTE options trader.
+Answer questions about trading performance using the data provided.
+Be specific with numbers. Keep it chill and concise with Jersey energy.
+
+Trade Data:
+{context}
+
+Question: {question}
+
+Answer:"""
+
+            prompt = ChatPromptTemplate.from_template(temporal_template)
+            chain = prompt | self.llm | StrOutputParser()
+            return chain.invoke({"context": trade_context, "question": question})
+
+        # Check if it's a trade/strategy question (use RAG)
+        trade_keywords = ['trade', 'spread', 'scalp', 'entry', 'exit', 'rsi', 'macd',
+                         'trend', 'ticker', 'spy', 'qqq', 'iwm', 'win', 'loss', 'pnl',
+                         'profit', 'stop', 'target', 'manifesto', 'rule', 'learner',
+                         'performance', 'best', 'worst', 'avoid', 'pattern']
+
+        if any(kw in question_lower for kw in trade_keywords):
+            return self.ask_rag(question)
+
+        # Default to general chat
+        return self.ask_general(question)
 
     def ask_rag(self, question: str) -> str:
         """Invokes the RAG chain for manifesto rules and trade insights."""
