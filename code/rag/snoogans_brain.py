@@ -29,6 +29,7 @@ KNOWLEDGE_DIR = os.path.join(BASE_DIR, "data", "knowledge")
 DB_PATH = os.path.join(BASE_DIR, "data", "vector_db")
 OLLAMA_HOST = "http://172.17.0.1:11434"
 DATA_DIR = os.path.join(BASE_DIR, "data")
+LEARNER_STATE_FILE = os.path.join(BASE_DIR, "code", "rag", "adaptive_learner_state.json")
 
 
 class SnoogansBrain:
@@ -54,8 +55,11 @@ class SnoogansBrain:
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
 
-        # Track last known trade count for auto-rebuild
+        # Track last known counts for auto-rebuild
         self._last_trade_count = self._count_trade_batches()
+        self._last_trade_total = len(self._load_trade_batches())
+        learner_state = self._load_learner_state()
+        self._last_learner_trades = learner_state.get('stats', {}).get('total_trades', 0)
 
         # Load or Build Vector Store
         if os.path.exists(DB_PATH) and os.path.isdir(DB_PATH):
@@ -82,10 +86,11 @@ class SnoogansBrain:
                     if f.startswith('trades_batch_') and f.endswith('.json')])
 
     def _load_trade_batches(self) -> list:
-        """Load all trade batch JSON files and return list of trades."""
+        """Load all trade JSON files and return list of trades."""
         all_trades = []
 
         for filename in sorted(os.listdir(KNOWLEDGE_DIR)):
+            # Load trades_batch_*.json files (legacy format)
             if filename.startswith('trades_batch_') and filename.endswith('.json'):
                 filepath = os.path.join(KNOWLEDGE_DIR, filename)
                 try:
@@ -96,6 +101,20 @@ class SnoogansBrain:
                         all_trades.extend(trades)
                 except (json.JSONDecodeError, IOError) as e:
                     print(f"WARNING: Could not load {filename}: {e}")
+
+            # Also load trades.json (scalp strategy format)
+            elif filename == 'trades.json':
+                filepath = os.path.join(KNOWLEDGE_DIR, filename)
+                try:
+                    with open(filepath, 'r') as f:
+                        trades = json.load(f)
+                        if isinstance(trades, list):
+                            for trade in trades:
+                                trade['_source'] = 'scalp_strategy'
+                            all_trades.extend(trades)
+                            print(f"Loaded {len(trades)} trades from trades.json")
+                except (json.JSONDecodeError, IOError) as e:
+                    print(f"WARNING: Could not load trades.json: {e}")
 
         return all_trades
 
@@ -428,6 +447,161 @@ Average Loss: ${stats['avg_loss']:+.2f}
 
         return docs
 
+    def _load_learner_state(self) -> dict:
+        """Load the RL learner's state file."""
+        if not os.path.exists(LEARNER_STATE_FILE):
+            return {}
+
+        try:
+            with open(LEARNER_STATE_FILE, 'r') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"WARNING: Could not load learner state: {e}")
+            return {}
+
+    def _learner_to_documents(self, learner_state: dict) -> list:
+        """
+        Convert RL learner insights to documents for RAG.
+
+        This provides the brain with learned patterns about which market conditions
+        favor entering vs skipping trades, without overfitting to specific Q-values.
+        """
+        if not learner_state:
+            return []
+
+        docs = []
+        q_table = learner_state.get('q_table', {})
+        stats = learner_state.get('stats', {})
+
+        if not q_table:
+            return []
+
+        # Document 1: Learner Overview
+        total_states = len(q_table)
+        total_trades = stats.get('total_trades', 0)
+        enter_wins = stats.get('enter_wins', 0)
+        enter_losses = stats.get('enter_losses', 0)
+        total_pnl = stats.get('total_pnl', 0)
+        good_skips = stats.get('counterfactual_good_skips', 0)
+        bad_skips = stats.get('counterfactual_bad_skips', 0)
+
+        win_rate = (enter_wins / total_trades * 100) if total_trades > 0 else 0
+        skip_accuracy = (good_skips / (good_skips + bad_skips) * 100) if (good_skips + bad_skips) > 0 else 0
+
+        overview = f"""RL LEARNER PERFORMANCE SUMMARY
+States Learned: {total_states}
+Total Trades Evaluated: {total_trades}
+Trade Win Rate: {win_rate:.1f}%
+Total P&L from Trades: ${total_pnl:+.2f}
+Good Skips (avoided losses): {good_skips}
+Bad Skips (missed wins): {bad_skips}
+Skip Accuracy: {skip_accuracy:.1f}%
+
+The RL learner uses Q-learning to decide whether to ENTER or SKIP trades based on
+market conditions. Higher Q[enter] means historically profitable conditions.
+Higher Q[skip] means historically unfavorable conditions.
+"""
+        docs.append(Document(
+            page_content=overview,
+            metadata={"source": "rl_learner", "type": "overview"}
+        ))
+
+        # Document 2: Best States to Trade (where entering has worked well)
+        # Sort by Q[enter] - Q[skip] advantage
+        state_advantages = []
+        for state_key, q_vals in q_table.items():
+            q_enter = q_vals.get('enter', 0)
+            q_skip = q_vals.get('skip', 0)
+            advantage = q_enter - q_skip
+            state_advantages.append((state_key, q_enter, q_skip, advantage))
+
+        state_advantages.sort(key=lambda x: x[3], reverse=True)
+
+        # Top states to trade
+        best_states = "RL LEARNER: BEST CONDITIONS TO TRADE\n"
+        best_states += "These market conditions have historically favored ENTERING trades:\n\n"
+
+        for state_key, q_enter, q_skip, advantage in state_advantages[:10]:
+            if advantage > 0:
+                parts = state_key.split('|')
+                if len(parts) >= 5:
+                    ticker, trend, rsi_bucket, hour_bucket, conf_bucket = parts[:5]
+                    best_states += f"  {ticker} | {trend} trend | RSI {rsi_bucket} | {hour_bucket} session | {conf_bucket} confidence\n"
+                    best_states += f"    → Q[enter]={q_enter:+.3f}, Q[skip]={q_skip:+.3f}, advantage={advantage:+.3f}\n\n"
+
+        docs.append(Document(
+            page_content=best_states,
+            metadata={"source": "rl_learner", "type": "best_states"}
+        ))
+
+        # Document 3: Worst States (where skipping has been better)
+        worst_states = "RL LEARNER: CONDITIONS TO AVOID\n"
+        worst_states += "These market conditions have historically favored SKIPPING trades:\n\n"
+
+        for state_key, q_enter, q_skip, advantage in reversed(state_advantages[-10:]):
+            if advantage < 0:
+                parts = state_key.split('|')
+                if len(parts) >= 5:
+                    ticker, trend, rsi_bucket, hour_bucket, conf_bucket = parts[:5]
+                    worst_states += f"  {ticker} | {trend} trend | RSI {rsi_bucket} | {hour_bucket} session | {conf_bucket} confidence\n"
+                    worst_states += f"    → Q[enter]={q_enter:+.3f}, Q[skip]={q_skip:+.3f}, advantage={advantage:+.3f}\n\n"
+
+        docs.append(Document(
+            page_content=worst_states,
+            metadata={"source": "rl_learner", "type": "worst_states"}
+        ))
+
+        # Document 4: Pattern Insights by Ticker
+        ticker_patterns = defaultdict(lambda: {'enter_advantage': [], 'skip_advantage': []})
+        for state_key, q_enter, q_skip, advantage in state_advantages:
+            parts = state_key.split('|')
+            if len(parts) >= 1:
+                ticker = parts[0]
+                if advantage > 0:
+                    ticker_patterns[ticker]['enter_advantage'].append(advantage)
+                else:
+                    ticker_patterns[ticker]['skip_advantage'].append(abs(advantage))
+
+        ticker_doc = "RL LEARNER: PATTERNS BY TICKER\n\n"
+        for ticker in ['SPY', 'QQQ', 'IWM']:
+            data = ticker_patterns.get(ticker, {})
+            enter_adv = data.get('enter_advantage', [])
+            skip_adv = data.get('skip_advantage', [])
+
+            if enter_adv or skip_adv:
+                avg_enter = sum(enter_adv) / len(enter_adv) if enter_adv else 0
+                avg_skip = sum(skip_adv) / len(skip_adv) if skip_adv else 0
+                ticker_doc += f"{ticker}:\n"
+                ticker_doc += f"  States favoring entry: {len(enter_adv)} (avg advantage: {avg_enter:.3f})\n"
+                ticker_doc += f"  States favoring skip: {len(skip_adv)} (avg advantage: {avg_skip:.3f})\n\n"
+
+        docs.append(Document(
+            page_content=ticker_doc,
+            metadata={"source": "rl_learner", "type": "ticker_patterns"}
+        ))
+
+        # Document 5: Recent Decisions (if available)
+        decision_history = learner_state.get('decision_history', [])
+        if decision_history:
+            recent_decisions = "RL LEARNER: RECENT DECISIONS\n\n"
+            for decision in decision_history[-20:]:
+                action = decision.get('action', 'unknown')
+                state = decision.get('state_key', 'unknown')
+                reason = decision.get('reason', '')
+                exploration = " (EXPLORATION)" if decision.get('exploration') else ""
+                timestamp = decision.get('timestamp', '')[:19]
+
+                recent_decisions += f"{timestamp} | {action.upper()}{exploration}\n"
+                recent_decisions += f"  State: {state}\n"
+                recent_decisions += f"  Reason: {reason}\n\n"
+
+            docs.append(Document(
+                page_content=recent_decisions,
+                metadata={"source": "rl_learner", "type": "recent_decisions"}
+            ))
+
+        return docs
+
     def _build_brain(self):
         """Build the vector store from all knowledge sources."""
         docs = []
@@ -448,14 +622,24 @@ Average Loss: ${stats['avg_loss']:+.2f}
                 docs.extend(loader.load())
                 loaded_files.append(file)
 
-        # Load Trade Batches (NEW!)
+        # Load Trade Batches
         trades = self._load_trade_batches()
         if trades:
             trade_docs = self._trades_to_documents(trades)
             docs.extend(trade_docs)
             batch_count = self._count_trade_batches()
-            loaded_files.append(f"{batch_count} trade batches ({len(trades)} trades)")
-            print(f"Analyzed {len(trades)} trades from {batch_count} batch files")
+            loaded_files.append(f"trades ({len(trades)} total)")
+            print(f"Analyzed {len(trades)} trades")
+
+        # Load RL Learner Insights
+        learner_state = self._load_learner_state()
+        if learner_state:
+            learner_docs = self._learner_to_documents(learner_state)
+            if learner_docs:
+                docs.extend(learner_docs)
+                q_table_size = len(learner_state.get('q_table', {}))
+                loaded_files.append(f"RL learner ({q_table_size} states)")
+                print(f"Loaded RL learner insights: {q_table_size} learned states")
 
         if not docs:
             raise ValueError("Knowledge dir empty — drop manifesto .txt or trade batches in data/knowledge/")
@@ -496,12 +680,32 @@ Average Loss: ${stats['avg_loss']:+.2f}
         print("Brain rebuild complete!")
 
     def check_for_new_trades(self) -> bool:
-        """Check if new trade batches exist and rebuild if needed."""
-        current_count = self._count_trade_batches()
-        if current_count > self._last_trade_count:
-            print(f"New trade batches detected ({self._last_trade_count} -> {current_count})")
+        """Check if new trades or learner updates exist and rebuild if needed."""
+        # Check trade count
+        current_trade_count = len(self._load_trade_batches())
+        trade_count_changed = current_trade_count > getattr(self, '_last_trade_total', 0)
+
+        # Check learner state (rebuild every 10 new trades learned)
+        learner_state = self._load_learner_state()
+        learner_trades = learner_state.get('stats', {}).get('total_trades', 0)
+        last_learner_trades = getattr(self, '_last_learner_trades', 0)
+        learner_changed = (learner_trades - last_learner_trades) >= 10
+
+        if trade_count_changed or learner_changed:
+            reason = []
+            if trade_count_changed:
+                reason.append(f"new trades ({getattr(self, '_last_trade_total', 0)} -> {current_trade_count})")
+            if learner_changed:
+                reason.append(f"learner updated ({last_learner_trades} -> {learner_trades} trades)")
+
+            print(f"Brain rebuild triggered: {', '.join(reason)}")
             self.rebuild_brain()
+
+            # Update tracking
+            self._last_trade_total = current_trade_count
+            self._last_learner_trades = learner_trades
             return True
+
         return False
 
     def get_trade_stats(self) -> dict:
