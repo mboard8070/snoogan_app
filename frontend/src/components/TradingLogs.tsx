@@ -1,5 +1,18 @@
 import { useState, useEffect, useRef } from 'react'
 
+interface Position {
+  ticker?: string
+  is_call?: boolean
+  strike_price?: number
+  debit?: number
+  contracts?: number
+  best_mark?: number
+  unrealized?: number
+  trail_active?: boolean
+  trail_level?: number
+  entry_time?: string
+}
+
 interface LogMessage {
   type: string
   data: {
@@ -7,9 +20,9 @@ interface LogMessage {
     daily_pnl: number
     trade_count: number
     market_open: boolean
-    positions_1m: unknown[]
-    positions_15m: unknown[]
-    positions_scalp: unknown[]
+    positions_1m: Record<string, Position>
+    positions_15m: Record<string, Position>
+    positions_scalp: Record<string, Position>
   }
 }
 
@@ -17,10 +30,18 @@ interface TradingLogsProps {
   wsUrl?: string
 }
 
+const STRATEGIES = ['1m', '15m', 'scalp'] as const
+type StrategyType = typeof STRATEGIES[number]
+
 export default function TradingLogs({ wsUrl }: TradingLogsProps) {
-  const [logs, setLogs] = useState<string[]>([])
+  const [logs, setLogs] = useState<Record<StrategyType, string[]>>({
+    '1m': [],
+    '15m': [],
+    'scalp': [],
+  })
   const [status, setStatus] = useState<LogMessage['data'] | null>(null)
   const [connected, setConnected] = useState(false)
+  const [activeStrategy, setActiveStrategy] = useState<StrategyType>('1m')
   const wsRef = useRef<WebSocket | null>(null)
   const logsEndRef = useRef<HTMLDivElement>(null)
 
@@ -37,7 +58,12 @@ export default function TradingLogs({ wsUrl }: TradingLogsProps) {
 
       ws.onopen = () => {
         setConnected(true)
-        setLogs((prev) => [...prev, `[${new Date().toLocaleTimeString()}] Connected to trading server`])
+        const timestamp = new Date().toLocaleTimeString()
+        setLogs((prev) => ({
+          '1m': [...prev['1m'], `[${timestamp}] Connected to trading server`],
+          '15m': [...prev['15m'], `[${timestamp}] Connected to trading server`],
+          'scalp': [...prev['scalp'], `[${timestamp}] Connected to trading server`],
+        }))
       }
 
       ws.onmessage = (event) => {
@@ -45,19 +71,31 @@ export default function TradingLogs({ wsUrl }: TradingLogsProps) {
           const msg: LogMessage = JSON.parse(event.data)
           if (msg.type === 'state') {
             setStatus(msg.data)
-            setLogs((prev) => [
-              ...prev.slice(-99),
-              `[${new Date().toLocaleTimeString()}] State update - Equity: $${msg.data.equity.toLocaleString()}, P&L: $${msg.data.daily_pnl}`,
-            ])
+            const timestamp = new Date().toLocaleTimeString()
+
+            const pos1m = Object.keys(msg.data.positions_1m || {}).length
+            const pos15m = Object.keys(msg.data.positions_15m || {}).length
+            const posScalp = Object.keys(msg.data.positions_scalp || {}).length
+
+            setLogs((prev) => ({
+              '1m': [...prev['1m'].slice(-99), `[${timestamp}] 1m Strategy - ${pos1m} positions, P&L: $${msg.data.daily_pnl}`],
+              '15m': [...prev['15m'].slice(-99), `[${timestamp}] 15m Strategy - ${pos15m} positions`],
+              'scalp': [...prev['scalp'].slice(-99), `[${timestamp}] Scalp Strategy - ${posScalp} positions`],
+            }))
           }
         } catch {
-          setLogs((prev) => [...prev.slice(-99), event.data])
+          // Ignore parse errors
         }
       }
 
       ws.onclose = () => {
         setConnected(false)
-        setLogs((prev) => [...prev, `[${new Date().toLocaleTimeString()}] Disconnected - reconnecting...`])
+        const timestamp = new Date().toLocaleTimeString()
+        setLogs((prev) => ({
+          '1m': [...prev['1m'], `[${timestamp}] Disconnected - reconnecting...`],
+          '15m': [...prev['15m'], `[${timestamp}] Disconnected - reconnecting...`],
+          'scalp': [...prev['scalp'], `[${timestamp}] Disconnected - reconnecting...`],
+        }))
         setTimeout(connect, 3000)
       }
 
@@ -75,58 +113,131 @@ export default function TradingLogs({ wsUrl }: TradingLogsProps) {
 
   useEffect(() => {
     logsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [logs])
+  }, [logs, activeStrategy])
 
-  const totalPositions =
-    (status?.positions_1m?.length || 0) +
-    (status?.positions_15m?.length || 0) +
-    (status?.positions_scalp?.length || 0)
+  const getPositionsForStrategy = (strategy: StrategyType): Record<string, Position> => {
+    if (!status) return {}
+    switch (strategy) {
+      case '1m': return status.positions_1m || {}
+      case '15m': return status.positions_15m || {}
+      case 'scalp': return status.positions_scalp || {}
+    }
+  }
+
+  const positions = getPositionsForStrategy(activeStrategy)
+  const positionList = Object.entries(positions).map(([ticker, pos]) => ({ ticker, ...pos }))
 
   return (
     <div className="space-y-4">
-      {/* Status Panel */}
-      <div className="bg-snoogans-card rounded-lg p-4">
-        <h3 className="text-lg font-semibold text-white mb-3">Strategy Status</h3>
+      {/* Status Panel - compact */}
+      <div className="bg-surface rounded-lg p-4 border border-gray-700">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div>
-            <p className="text-gray-400 text-xs">Market</p>
-            <p className={`font-bold ${status?.market_open ? 'text-snoogans-green' : 'text-snoogans-red'}`}>
+            <p className="text-xs text-gray-400 uppercase">Market</p>
+            <p className={`text-xl font-bold ${status?.market_open ? 'text-green-400' : 'text-red-400'}`}>
               {status?.market_open ? 'OPEN' : 'CLOSED'}
             </p>
           </div>
           <div>
-            <p className="text-gray-400 text-xs">Daily P&L</p>
-            <p className={`font-bold ${(status?.daily_pnl || 0) >= 0 ? 'text-snoogans-green' : 'text-snoogans-red'}`}>
-              ${status?.daily_pnl?.toLocaleString() || '0'}
+            <p className="text-xs text-gray-400 uppercase">Daily P&L</p>
+            <p className={`text-xl font-bold ${(status?.daily_pnl || 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+              {(status?.daily_pnl || 0) >= 0 ? '+' : ''}${status?.daily_pnl?.toFixed(2) || '0.00'}
             </p>
           </div>
           <div>
-            <p className="text-gray-400 text-xs">Open Positions</p>
-            <p className="font-bold text-white">{totalPositions}</p>
+            <p className="text-xs text-gray-400 uppercase">Equity</p>
+            <p className="text-xl font-bold text-accent">${status?.equity?.toLocaleString() || '0'}</p>
           </div>
           <div>
-            <p className="text-gray-400 text-xs">Status</p>
-            <p className={`font-bold ${connected ? 'text-snoogans-green' : 'text-yellow-500'}`}>
-              {connected ? 'CONNECTED' : 'CONNECTING...'}
+            <p className="text-xs text-gray-400 uppercase">Status</p>
+            <p className={`text-xl font-bold ${connected ? 'text-green-400' : 'text-yellow-400'}`}>
+              {connected ? 'LIVE' : 'CONNECTING'}
             </p>
           </div>
         </div>
       </div>
 
-      {/* Log Output */}
-      <div className="bg-snoogans-card rounded-lg p-4">
-        <h3 className="text-lg font-semibold text-white mb-3">Live Logs</h3>
-        <div className="bg-black rounded-lg p-3 h-96 overflow-y-auto font-mono text-sm">
-          {logs.length === 0 ? (
-            <p className="text-gray-500">Waiting for logs...</p>
+      {/* Strategy Tabs */}
+      <div className="flex border-b border-gray-700">
+        {STRATEGIES.map((strategy) => {
+          const posCount = Object.keys(getPositionsForStrategy(strategy)).length
+          const isActive = activeStrategy === strategy
+          return (
+            <button
+              key={strategy}
+              onClick={() => setActiveStrategy(strategy)}
+              className={`px-5 py-2.5 font-semibold transition-all duration-200 relative flex items-center gap-2 ${
+                isActive
+                  ? 'text-[#f87171]'
+                  : 'text-[#4ade80] hover:text-[#86efac]'
+              }`}
+            >
+              <span>{strategy === '1m' ? '1 Minute' : strategy === '15m' ? '15 Minute' : 'Scalp'}</span>
+              <span className={`px-2 py-0.5 rounded text-xs font-bold ${
+                isActive ? 'bg-red-900/50 text-red-300' : 'bg-green-900/50 text-green-300'
+              }`}>
+                {posCount}
+              </span>
+              {isActive && (
+                <span className="absolute bottom-0 left-0 right-0 h-[3px] bg-[#f87171] rounded-t" />
+              )}
+            </button>
+          )
+        })}
+      </div>
+
+      {/* Content Grid - positions and logs side by side on larger screens */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Positions Table */}
+        <div className="bg-surface rounded-lg p-4 border border-gray-700">
+          <h3 className="text-lg font-bold mb-3">
+            {activeStrategy === '1m' ? '1 Minute' : activeStrategy === '15m' ? '15 Minute' : 'Scalp'} Positions
+          </h3>
+          {positionList.length === 0 ? (
+            <p className="text-gray-500 text-sm">No active positions</p>
           ) : (
-            logs.map((log, i) => (
-              <p key={i} className="text-green-400 whitespace-pre-wrap">
-                {log}
-              </p>
-            ))
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-700 text-gray-400 text-xs uppercase">
+                    <th className="pb-2 text-left">Ticker</th>
+                    <th className="pb-2 text-left">Type</th>
+                    <th className="pb-2 text-right">Strike</th>
+                    <th className="pb-2 text-right">P&L</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {positionList.map((pos) => (
+                    <tr key={pos.ticker} className="border-b border-gray-800">
+                      <td className="py-2 font-bold">{pos.ticker}</td>
+                      <td className="py-2">{pos.is_call ? 'CALL' : 'PUT'}</td>
+                      <td className="py-2 text-right">${pos.strike_price?.toFixed(0) || '-'}</td>
+                      <td className={`py-2 text-right font-bold ${(pos.unrealized || 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                        ${pos.unrealized?.toFixed(2) || '0.00'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
-          <div ref={logsEndRef} />
+        </div>
+
+        {/* Log Output */}
+        <div className="bg-surface rounded-lg p-4 border border-gray-700">
+          <h3 className="text-lg font-bold mb-3">Live Logs</h3>
+          <div className="bg-background rounded p-3 h-64 overflow-y-auto font-mono text-xs">
+            {logs[activeStrategy].length === 0 ? (
+              <p className="text-gray-500">Waiting for logs...</p>
+            ) : (
+              logs[activeStrategy].map((log, i) => (
+                <p key={i} className="text-accent mb-1">
+                  {log}
+                </p>
+              ))
+            )}
+            <div ref={logsEndRef} />
+          </div>
         </div>
       </div>
     </div>

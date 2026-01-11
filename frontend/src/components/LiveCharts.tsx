@@ -2,13 +2,14 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { createChart, type IChartApi, type ISeriesApi, CandlestickSeries } from 'lightweight-charts'
 import type { CandlestickData, Time } from 'lightweight-charts'
 
-const TICKERS = ['SPY', 'QQQ', 'IWM']
+const TICKERS = ['SPY', 'QQQ', 'IWM'] as const
+type TickerType = typeof TICKERS[number]
 
 export default function LiveCharts() {
-  const containerRefs = useRef<Record<string, HTMLDivElement | null>>({})
-  const charts = useRef<Record<string, IChartApi>>({})
-  const series = useRef<Record<string, ISeriesApi<'Candlestick'>>>({})
-  const candleData = useRef<Record<string, CandlestickData<Time>[]>>({
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const chartRef = useRef<IChartApi | null>(null)
+  const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
+  const candleData = useRef<Record<TickerType, CandlestickData<Time>[]>>({
     SPY: [],
     QQQ: [],
     IWM: [],
@@ -16,27 +17,34 @@ export default function LiveCharts() {
   const wsRef = useRef<WebSocket | null>(null)
   const [prices, setPrices] = useState<Record<string, number>>({})
   const [connected, setConnected] = useState(false)
-  const [initialized, setInitialized] = useState<Record<string, boolean>>({})
+  const [activeTicker, setActiveTicker] = useState<TickerType>('SPY')
+  const [chartInitialized, setChartInitialized] = useState(false)
 
-  const initializeChart = useCallback((ticker: string) => {
-    const container = containerRefs.current[ticker]
-    if (!container || charts.current[ticker]) return
+  const initializeChart = useCallback(() => {
+    const container = containerRef.current
+    if (!container) return
+
+    if (chartRef.current) {
+      chartRef.current.remove()
+      chartRef.current = null
+      seriesRef.current = null
+    }
 
     const width = container.clientWidth
-    const height = container.clientHeight || 300
+    const height = 500
 
-    if (width === 0) return // Container not visible yet
+    if (width === 0) return
 
     const chart = createChart(container, {
       width,
       height,
       layout: {
-        background: { color: '#1e293b' },
+        background: { color: '#1a1a2e' },
         textColor: '#9ca3af',
       },
       grid: {
-        vertLines: { color: '#374151' },
-        horzLines: { color: '#374151' },
+        vertLines: { color: '#333' },
+        horzLines: { color: '#333' },
       },
       timeScale: {
         timeVisible: true,
@@ -45,65 +53,57 @@ export default function LiveCharts() {
     })
 
     const candleSeries = chart.addSeries(CandlestickSeries, {
-      upColor: '#22c55e',
+      upColor: '#00ff9d',
       downColor: '#ef4444',
-      borderUpColor: '#22c55e',
+      borderUpColor: '#00ff9d',
       borderDownColor: '#ef4444',
-      wickUpColor: '#22c55e',
+      wickUpColor: '#00ff9d',
       wickDownColor: '#ef4444',
     })
 
-    charts.current[ticker] = chart
-    series.current[ticker] = candleSeries
+    chartRef.current = chart
+    seriesRef.current = candleSeries
+    setChartInitialized(true)
 
-    // If we have stored data, apply it now
-    if (candleData.current[ticker].length > 0) {
-      candleSeries.setData(candleData.current[ticker])
+    if (candleData.current[activeTicker].length > 0) {
+      candleSeries.setData(candleData.current[activeTicker])
       chart.timeScale().fitContent()
     }
 
-    setInitialized((prev) => ({ ...prev, [ticker]: true }))
-
-    // Handle resize
     const resizeObserver = new ResizeObserver(() => {
       const newWidth = container.clientWidth
-      if (newWidth > 0) {
-        chart.applyOptions({ width: newWidth })
+      if (newWidth > 0 && chartRef.current) {
+        chartRef.current.applyOptions({ width: newWidth })
       }
     })
     resizeObserver.observe(container)
 
     return () => {
       resizeObserver.disconnect()
-      chart.remove()
     }
-  }, [])
+  }, [activeTicker])
 
-  // Initialize charts after component mounts
   useEffect(() => {
-    // Small delay to ensure containers are rendered
     const timer = setTimeout(() => {
-      TICKERS.forEach((ticker) => initializeChart(ticker))
+      initializeChart()
     }, 100)
 
-    return () => clearTimeout(timer)
+    return () => {
+      clearTimeout(timer)
+      if (chartRef.current) {
+        chartRef.current.remove()
+        chartRef.current = null
+        seriesRef.current = null
+      }
+    }
   }, [initializeChart])
 
-  // Re-initialize when tab becomes visible
   useEffect(() => {
-    const observer = new MutationObserver(() => {
-      TICKERS.forEach((ticker) => {
-        const container = containerRefs.current[ticker]
-        if (container && container.clientWidth > 0 && !charts.current[ticker]) {
-          initializeChart(ticker)
-        }
-      })
-    })
-
-    observer.observe(document.body, { attributes: true, subtree: true, attributeFilter: ['class', 'style'] })
-
-    return () => observer.disconnect()
-  }, [initializeChart])
+    if (seriesRef.current && candleData.current[activeTicker].length > 0) {
+      seriesRef.current.setData(candleData.current[activeTicker])
+      chartRef.current?.timeScale().fitContent()
+    }
+  }, [activeTicker])
 
   useEffect(() => {
     const getWsUrl = () => {
@@ -117,7 +117,6 @@ export default function LiveCharts() {
 
       ws.onopen = () => {
         setConnected(true)
-        // Subscribe to all tickers
         TICKERS.forEach((ticker) => {
           ws.send(JSON.stringify({ type: 'subscribe', ticker }))
         })
@@ -127,7 +126,7 @@ export default function LiveCharts() {
         try {
           const msg = JSON.parse(event.data)
           if (msg.type === 'history' && msg.candles) {
-            const ticker = msg.ticker as string
+            const ticker = msg.ticker as TickerType
             const candles: CandlestickData<Time>[] = msg.candles.map(
               (c: { time: number; open: number; high: number; low: number; close: number }) => ({
                 time: c.time as Time,
@@ -138,16 +137,13 @@ export default function LiveCharts() {
               })
             )
 
-            // Store data in ref
             candleData.current[ticker] = candles
 
-            // Apply to chart if initialized
-            if (series.current[ticker]) {
-              series.current[ticker].setData(candles)
-              charts.current[ticker]?.timeScale().fitContent()
+            if (ticker === activeTicker && seriesRef.current) {
+              seriesRef.current.setData(candles)
+              chartRef.current?.timeScale().fitContent()
             }
 
-            // Update current price
             if (candles.length > 0) {
               setPrices((prev) => ({
                 ...prev,
@@ -175,37 +171,67 @@ export default function LiveCharts() {
     return () => {
       wsRef.current?.close()
     }
-  }, [])
+  }, [activeTicker])
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-xl font-semibold text-white">Live Charts</h2>
-        <span className={`px-3 py-1 rounded-full text-sm ${connected ? 'bg-snoogans-green/20 text-snoogans-green' : 'bg-yellow-500/20 text-yellow-500'}`}>
-          {connected ? 'Connected' : 'Connecting...'}
-        </span>
+      {/* Header with ticker tabs and connection status */}
+      <div className="flex items-center justify-between flex-wrap gap-4">
+        {/* Ticker Tabs */}
+        <div className="flex border-b border-gray-700">
+          {TICKERS.map((ticker) => {
+            const isActive = activeTicker === ticker
+            const price = prices[ticker]
+            return (
+              <button
+                key={ticker}
+                onClick={() => setActiveTicker(ticker)}
+                className={`px-5 py-2.5 font-semibold transition-all duration-200 relative ${
+                  isActive
+                    ? 'text-[#f87171]'
+                    : 'text-[#4ade80] hover:text-[#86efac]'
+                }`}
+              >
+                <span className="text-lg">{ticker}</span>
+                {price && (
+                  <span className={`ml-2 font-mono text-sm ${isActive ? 'text-red-300' : 'text-green-300'}`}>
+                    ${price.toFixed(2)}
+                  </span>
+                )}
+                {isActive && (
+                  <span className="absolute bottom-0 left-0 right-0 h-[3px] bg-[#f87171] rounded-t" />
+                )}
+              </button>
+            )
+          })}
+        </div>
+
+        {/* Connection Status */}
+        <div className={`px-4 py-2 rounded-lg font-bold text-sm border-2 ${
+          connected
+            ? 'bg-green-900/50 text-green-400 border-green-600'
+            : 'bg-yellow-900/50 text-yellow-400 border-yellow-600'
+        }`}>
+          {connected ? 'CONNECTED' : 'CONNECTING...'}
+        </div>
       </div>
 
-      <div className="grid gap-4">
-        {TICKERS.map((ticker) => (
-          <div key={ticker} className="bg-snoogans-card rounded-lg p-4">
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-lg font-semibold text-white">{ticker}</h3>
-              <span className="text-snoogans-accent font-mono">
-                {prices[ticker] ? `$${prices[ticker].toFixed(2)}` : '—'}
-              </span>
-            </div>
-            <div
-              ref={(el) => {
-                containerRefs.current[ticker] = el
-              }}
-              className="h-[300px] w-full"
-            />
-            {!initialized[ticker] && (
-              <p className="text-gray-500 text-center py-4">Loading chart...</p>
-            )}
-          </div>
-        ))}
+      {/* Chart Container */}
+      <div className="bg-surface rounded-lg p-4 border border-gray-700">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-xl font-bold">{activeTicker}</h3>
+          <span className="text-accent font-mono text-2xl font-bold">
+            {prices[activeTicker] ? `$${prices[activeTicker].toFixed(2)}` : 'Loading...'}
+          </span>
+        </div>
+        <div
+          ref={containerRef}
+          className="w-full rounded overflow-hidden"
+          style={{ height: '500px' }}
+        />
+        {!chartInitialized && (
+          <p className="text-gray-500 text-center py-8">Loading chart...</p>
+        )}
       </div>
     </div>
   )
