@@ -35,6 +35,11 @@ async def get_dashboard_state():
     strat_15m = TradingStrategy15m()
     strat_scalp = ScalpStrategy()
 
+    # Get full status from each strategy
+    status_1m = strat_1m.get_status()
+    status_15m = strat_15m.get_status()
+    status_scalp = strat_scalp.get_status()
+
     # Get equity from history (actual tracked equity) or fall back to starting balance
     equity_history = strat_1m.equity_history
     if equity_history and len(equity_history) > 0:
@@ -54,6 +59,28 @@ async def get_dashboard_state():
         "positions_15m": strat_15m.positions,
         "positions_scalp": strat_scalp.positions,
         "equity_history": equity_history[-100:] if equity_history else [],
+        # Full strategy status for Trading Logs
+        "status_1m": {
+            "daily_pnl": status_1m.get("daily_pnl", 0),
+            "daily_loss_limit": status_1m.get("daily_loss_limit", 0),
+            "trades_today": status_1m.get("trades_today", 0),
+            "can_trade": status_1m.get("can_trade", False),
+            "current_trends": status_1m.get("current_trends", {}),
+        },
+        "status_15m": {
+            "daily_pnl": status_15m.get("daily_pnl", 0),
+            "daily_loss_limit": status_15m.get("daily_loss_limit", 0),
+            "trades_today": status_15m.get("trades_today", 0),
+            "can_trade": status_15m.get("can_trade", False),
+            "current_trends": status_15m.get("current_trends", {}),
+        },
+        "status_scalp": {
+            "daily_pnl": status_scalp.get("daily_pnl", 0),
+            "daily_loss_limit": status_scalp.get("daily_loss_limit", 0),
+            "trades_today": status_scalp.get("trades_today", 0),
+            "can_trade": status_scalp.get("can_trade", False),
+            "current_trends": status_scalp.get("current_trends", {}),
+        },
     }
 
 @router.post("/ask")

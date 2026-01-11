@@ -13,6 +13,14 @@ interface Position {
   entry_time?: string
 }
 
+interface StrategyStatus {
+  daily_pnl: number
+  daily_loss_limit: number
+  trades_today: number
+  can_trade: boolean
+  current_trends: Record<string, string>
+}
+
 interface LogMessage {
   type: string
   data: {
@@ -23,6 +31,9 @@ interface LogMessage {
     positions_1m: Record<string, Position>
     positions_15m: Record<string, Position>
     positions_scalp: Record<string, Position>
+    status_1m: StrategyStatus
+    status_15m: StrategyStatus
+    status_scalp: StrategyStatus
   }
 }
 
@@ -124,24 +135,36 @@ export default function TradingLogs({ wsUrl }: TradingLogsProps) {
     }
   }
 
+  const getStatusForStrategy = (strategy: StrategyType): StrategyStatus | null => {
+    if (!status) return null
+    switch (strategy) {
+      case '1m': return status.status_1m || null
+      case '15m': return status.status_15m || null
+      case 'scalp': return status.status_scalp || null
+    }
+  }
+
   const positions = getPositionsForStrategy(activeStrategy)
   const positionList = Object.entries(positions).map(([ticker, pos]) => ({ ticker, ...pos }))
+  const strategyStatus = getStatusForStrategy(activeStrategy)
+  const trends = strategyStatus?.current_trends || {}
 
   return (
     <div className="space-y-4">
-      {/* Status Panel - compact */}
+      {/* Status Panel - Full stats like Streamlit */}
       <div className="bg-surface rounded-lg p-4 border border-gray-700">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {/* Top row: P&L and limits */}
+        <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-4">
           <div>
-            <p className="text-xs text-gray-400 uppercase">Market</p>
-            <p className={`text-xl font-bold ${status?.market_open ? 'text-green-400' : 'text-red-400'}`}>
-              {status?.market_open ? 'OPEN' : 'CLOSED'}
+            <p className="text-xs text-gray-400 uppercase">Daily P&L</p>
+            <p className={`text-xl font-bold ${(strategyStatus?.daily_pnl || 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+              ${(strategyStatus?.daily_pnl || 0) >= 0 ? '+' : ''}{(strategyStatus?.daily_pnl || 0).toFixed(2)}
             </p>
           </div>
           <div>
-            <p className="text-xs text-gray-400 uppercase">Daily P&L</p>
-            <p className={`text-xl font-bold ${(status?.daily_pnl || 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-              {(status?.daily_pnl || 0) >= 0 ? '+' : ''}${status?.daily_pnl?.toFixed(2) || '0.00'}
+            <p className="text-xs text-gray-400 uppercase">Loss Limit</p>
+            <p className="text-xl font-bold text-red-400">
+              ${(strategyStatus?.daily_loss_limit || 0).toFixed(2)}
             </p>
           </div>
           <div>
@@ -149,10 +172,37 @@ export default function TradingLogs({ wsUrl }: TradingLogsProps) {
             <p className="text-xl font-bold text-accent">${status?.equity?.toLocaleString() || '0'}</p>
           </div>
           <div>
+            <p className="text-xs text-gray-400 uppercase">Trades Today</p>
+            <p className="text-xl font-bold text-accent">{strategyStatus?.trades_today || 0}</p>
+          </div>
+          <div>
+            <p className="text-xs text-gray-400 uppercase">Can Trade</p>
+            <p className={`text-xl font-bold ${strategyStatus?.can_trade ? 'text-green-400' : 'text-red-400'}`}>
+              {strategyStatus?.can_trade ? 'Yes' : 'No'}
+            </p>
+          </div>
+          <div>
             <p className="text-xs text-gray-400 uppercase">Status</p>
             <p className={`text-xl font-bold ${connected ? 'text-green-400' : 'text-yellow-400'}`}>
               {connected ? 'LIVE' : 'CONNECTING'}
             </p>
+          </div>
+        </div>
+
+        {/* Trends row */}
+        <div className="border-t border-gray-700 pt-3">
+          <p className="text-xs text-gray-400 uppercase mb-2">Trends</p>
+          <div className="flex gap-4">
+            {['SPY', 'QQQ', 'IWM'].map((ticker) => {
+              const trend = trends[ticker] || '---'
+              const color = trend === 'bull' ? 'text-green-400' : trend === 'bear' ? 'text-red-400' : 'text-yellow-400'
+              return (
+                <div key={ticker} className="flex items-center gap-2">
+                  <span className="text-gray-400 font-bold">{ticker}:</span>
+                  <span className={`font-bold uppercase ${color}`}>{trend}</span>
+                </div>
+              )
+            })}
           </div>
         </div>
       </div>
