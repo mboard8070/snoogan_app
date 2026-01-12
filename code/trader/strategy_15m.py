@@ -128,11 +128,14 @@ class TradingStrategy15m:
                     self.daily_pnl = state.get('daily_pnl', 0.0)
                     self.last_pnl_date = state.get('last_pnl_date', date.today().isoformat())
                     self.closed_trades = state.get('closed_trades', [])
+                    self.current_trends = state.get('current_trends', {})
+                    self.trades_today = state.get('trades_today', [])
 
-            # Reset daily P&L if new day
+            # Reset daily P&L and trades_today if new day
             if self.last_pnl_date != date.today().isoformat():
-                logger.info(f"{self.prefix} New trading day - resetting daily P&L")
+                logger.info(f"{self.prefix} New trading day - resetting daily P&L and trades_today")
                 self.daily_pnl = 0.0
+                self.trades_today = []
                 self.last_pnl_date = date.today().isoformat()
                 self._save_state()
                 
@@ -157,7 +160,9 @@ class TradingStrategy15m:
             'equity_history': self.equity_history,
             'daily_pnl': self.daily_pnl,
             'last_pnl_date': self.last_pnl_date,
-            'closed_trades': self.closed_trades
+            'closed_trades': self.closed_trades,
+            'current_trends': self.current_trends,
+            'trades_today': self.trades_today,
         }
 
         def json_serializer(obj):
@@ -901,13 +906,19 @@ class TradingStrategy15m:
 
     def get_status(self) -> Dict[str, Any]:
         """Get current strategy status for dashboard display"""
+        # Calculate trades_today from closed_trades with today's exit_time
+        today_str = date.today().isoformat()
+        trades_today_count = sum(
+            1 for t in self.closed_trades
+            if t.get('exit_time', '').startswith(today_str)
+        )
         return {
             "equity": self.equity_history[-1] if self.equity_history else 0,
             "daily_pnl": self.daily_pnl,
             "daily_loss_limit": self.daily_loss_limit,
             "open_positions": len(self.positions),
             "positions": self.positions,
-            "trades_today": len(self.trades_today),
+            "trades_today": trades_today_count,
             "is_trading_day": self.is_trading_day(),
             "can_trade": self.can_enter_trades() and self.check_daily_loss_nanny(),
             "current_trends": self.current_trends,

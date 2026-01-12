@@ -10,7 +10,7 @@ import os
 import sys
 from contextlib import redirect_stdout
 from dataclasses import dataclass
-from datetime import datetime, time as dt_time
+from datetime import datetime, time as dt_time, date
 from pathlib import Path
 from typing import Any
 
@@ -398,12 +398,20 @@ def format_strategy_status(strategy, strategy_type: str = "spread") -> str:
         status = strategy.get_status()
         lines = []
 
+        # Calculate trades_today from closed_trades with today's exit_time
+        today_str = date.today().isoformat()
+        closed_trades = getattr(strategy, 'closed_trades', [])
+        trades_today_count = sum(
+            1 for t in closed_trades
+            if t.get('exit_time', '').startswith(today_str)
+        )
+
         # Header with PnL summary
         lines.append(f"{'='*50}")
         lines.append(f"Daily P&L: ${status['daily_pnl']:+.2f} | "
                     f"Loss Limit: ${status['daily_loss_limit']:.2f}")
         lines.append(f"Equity: ${status['equity']:,.2f} | "
-                    f"Trades Today: {status['trades_today']}")
+                    f"Trades Today: {trades_today_count}")
         lines.append(f"Can Trade: {'Yes' if status['can_trade'] else 'No'}")
         lines.append(f"{'='*50}")
 
@@ -701,6 +709,15 @@ def render_learner_monitor() -> None:
         st.warning("Adaptive Learner not available")
         return
 
+    # Debug: show state file info
+    state_file = Path("/home/mboard76/nvidia-workbench/snoogan_app/code/rag/adaptive_learner_state.json")
+    if state_file.exists():
+        import os
+        mtime = datetime.fromtimestamp(os.path.getmtime(state_file))
+        st.caption(f"DEBUG: State file exists, last modified: {mtime.strftime('%Y-%m-%d %H:%M:%S')}")
+    else:
+        st.caption("DEBUG: State file does NOT exist")
+
     # Learner display with auto-refresh
     learner_placeholder = st.empty()
 
@@ -759,13 +776,18 @@ def render_learner_monitor() -> None:
 
             # Recent decisions in expander
             with st.expander("Recent Decisions", expanded=False):
+                # Debug logging
+                st.caption(f"DEBUG: decision_history length = {len(learner.decision_history)}")
+                st.caption(f"DEBUG: decisions summary = {decisions}")
+                recent = learner.get_recent_decisions(10)
+                st.caption(f"DEBUG: recent_decisions count = {len(recent)}")
+
                 if decisions['total'] > 0:
                     col1, col2, col3 = st.columns(3)
                     col1.metric("Enters", decisions['enters'], f"{decisions['enter_rate']:.0f}%")
                     col2.metric("Skips", decisions['skips'], f"{100-decisions['enter_rate']:.0f}%")
                     col3.metric("Explores", decisions['explorations'], f"{decisions['exploration_rate']:.0f}%")
 
-                    recent = learner.get_recent_decisions(10)
                     if recent:
                         decision_data = []
                         for d in recent:
@@ -776,8 +798,10 @@ def render_learner_monitor() -> None:
                                 "Exp": "Y" if d.get('exploration') else ""
                             })
                         st.dataframe(pd.DataFrame(decision_data), use_container_width=True, hide_index=True, height=200)
+                    else:
+                        st.caption("No recent decisions returned")
                 else:
-                    st.caption("No decisions yet")
+                    st.caption("No decisions yet (decisions['total'] == 0)")
 
     update_learner()
 
@@ -813,7 +837,10 @@ def render_trading_logs() -> None:
         log_display_1m.code(combined_output, language="bash", wrap_lines=True)
 
         send_greeting_if_needed()
-        today_trades = len(getattr(st.session_state.strategy_1m, "trades_today", []))
+        # Calculate trades_today from closed_trades with today's exit_time
+        today_str = date.today().isoformat()
+        closed_trades_1m = getattr(st.session_state.strategy_1m, 'closed_trades', [])
+        today_trades = sum(1 for t in closed_trades_1m if t.get('exit_time', '').startswith(today_str))
         daily_pnl = st.session_state.strategy_1m.daily_pnl
         send_eod_if_needed(today_trades, daily_pnl)
         refresh_dashboard_state()
@@ -847,7 +874,10 @@ def render_trading_logs() -> None:
         log_display_15m.code(combined_output, language="bash", wrap_lines=True)
 
         send_greeting_if_needed()
-        today_trades = len(getattr(st.session_state.strategy_15m, "trades_today", []))
+        # Calculate trades_today from closed_trades with today's exit_time
+        today_str = date.today().isoformat()
+        closed_trades_15m = getattr(st.session_state.strategy_15m, 'closed_trades', [])
+        today_trades = sum(1 for t in closed_trades_15m if t.get('exit_time', '').startswith(today_str))
         daily_pnl = st.session_state.strategy_15m.daily_pnl
         send_eod_if_needed(today_trades, daily_pnl)
         refresh_dashboard_state()
@@ -892,11 +922,14 @@ def render_trading_logs() -> None:
         log_display_scalp.code(combined_output, language="bash", wrap_lines=True)
 
         send_greeting_if_needed()
-        today_trades = len(getattr(st.session_state.strategy_scalp, "trades_today", []))
+        # Calculate trades_today from closed_trades with today's exit_time
+        today_str = date.today().isoformat()
+        closed_trades_scalp = getattr(st.session_state.strategy_scalp, 'closed_trades', [])
+        today_trades = sum(1 for t in closed_trades_scalp if t.get('exit_time', '').startswith(today_str))
         daily_pnl = st.session_state.strategy_scalp.daily_pnl
         send_eod_if_needed(today_trades, daily_pnl)
         refresh_dashboard_state()
-    
+
     sync_scalp_cycle()
 
 

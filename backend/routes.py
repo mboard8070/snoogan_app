@@ -5,7 +5,7 @@ import asyncio
 import json
 from datetime import datetime
 from typing import Dict, List, Any
-from .shared import get_trade_count, get_starting_balance
+from .shared import get_trade_count, get_starting_balance, get_total_learned, get_shared_equity, BATCH_SIZE
 from code.trader.strategy import TradingStrategy
 from code.trader.strategy_15m import TradingStrategy15m
 from code.trader.scalp_strategy import ScalpStrategy
@@ -40,19 +40,19 @@ async def get_dashboard_state():
     status_15m = strat_15m.get_status()
     status_scalp = strat_scalp.get_status()
 
-    # Get equity from history (actual tracked equity) or fall back to starting balance
+    # Get equity from shared equity file (single source of truth, same as Streamlit)
+    equity = get_shared_equity()
     equity_history = strat_1m.equity_history
-    if equity_history and len(equity_history) > 0:
-        equity = equity_history[-1]
-    else:
-        equity = get_starting_balance()
 
-    daily_pnl = strat_1m.daily_pnl
+    # Sum daily PnL from all three strategies
+    daily_pnl = strat_1m.daily_pnl + strat_15m.daily_pnl + strat_scalp.daily_pnl
 
     return {
         "equity": round(equity, 2),
         "daily_pnl": round(daily_pnl, 2),
-        "trade_count": get_trade_count(),
+        "trade_count": get_trade_count(),  # Current batch count (0-30)
+        "total_learned": get_total_learned(),  # Total archived trades
+        "batch_size": BATCH_SIZE,
         "market_open": datetime.now().time().replace(tzinfo=None) >= datetime.strptime("09:30", "%H:%M").time() and
                        datetime.now().time().replace(tzinfo=None) <= datetime.strptime("16:00", "%H:%M").time(),
         "positions_1m": strat_1m.positions,
@@ -110,9 +110,101 @@ async def get_learner_data():
 @router.websocket("/ws/logs")
 async def websocket_logs(websocket: WebSocket):
     await websocket.accept()
+
+    # Track previous positions to detect entries/exits
+    prev_positions: Dict[str, Dict[str, Any]] = {
+        "1m": {},
+        "15m": {},
+        "scalp": {},
+    }
+
     try:
         while True:
             state = await get_dashboard_state()
+
+            # Detect trade events by comparing current vs previous positions
+            trade_events: List[Dict[str, Any]] = []
+            timestamp = datetime.now().isoformat()
+
+            # Check 1m strategy
+            current_1m = state.get("positions_1m", {})
+            for ticker, pos in current_1m.items():
+                if ticker not in prev_positions["1m"]:
+                    trade_events.append({
+                        "timestamp": timestamp,
+                        "strategy": "1m",
+                        "event": "entry",
+                        "ticker": ticker,
+                        "type": "PUT" if pos.get("is_put") else "CALL",
+                        "strikes": f"{pos.get('short', '?')}/{pos.get('long', '?')}",
+                        "credit": pos.get("credit"),
+                        "contracts": pos.get("contracts"),
+                    })
+            for ticker in prev_positions["1m"]:
+                if ticker not in current_1m:
+                    trade_events.append({
+                        "timestamp": timestamp,
+                        "strategy": "1m",
+                        "event": "exit",
+                        "ticker": ticker,
+                    })
+
+            # Check 15m strategy
+            current_15m = state.get("positions_15m", {})
+            for ticker, pos in current_15m.items():
+                if ticker not in prev_positions["15m"]:
+                    trade_events.append({
+                        "timestamp": timestamp,
+                        "strategy": "15m",
+                        "event": "entry",
+                        "ticker": ticker,
+                        "type": "PUT" if pos.get("is_put") else "CALL",
+                        "strikes": f"{pos.get('short', '?')}/{pos.get('long', '?')}",
+                        "credit": pos.get("credit"),
+                        "contracts": pos.get("contracts"),
+                    })
+            for ticker in prev_positions["15m"]:
+                if ticker not in current_15m:
+                    trade_events.append({
+                        "timestamp": timestamp,
+                        "strategy": "15m",
+                        "event": "exit",
+                        "ticker": ticker,
+                    })
+
+            # Check scalp strategy
+            current_scalp = state.get("positions_scalp", {})
+            for ticker, pos in current_scalp.items():
+                if ticker not in prev_positions["scalp"]:
+                    trade_events.append({
+                        "timestamp": timestamp,
+                        "strategy": "scalp",
+                        "event": "entry",
+                        "ticker": ticker,
+                        "type": "CALL" if pos.get("is_call") else "PUT",
+                        "strike": pos.get("strike_price"),
+                        "debit": pos.get("debit"),
+                        "contracts": pos.get("contracts"),
+                    })
+            for ticker in prev_positions["scalp"]:
+                if ticker not in current_scalp:
+                    trade_events.append({
+                        "timestamp": timestamp,
+                        "strategy": "scalp",
+                        "event": "exit",
+                        "ticker": ticker,
+                    })
+
+            # Update previous positions
+            prev_positions["1m"] = dict(current_1m)
+            prev_positions["15m"] = dict(current_15m)
+            prev_positions["scalp"] = dict(current_scalp)
+
+            # Send trade events first (if any)
+            for event in trade_events:
+                await websocket.send_json({"type": "trade", "data": event})
+
+            # Then send state update
             await websocket.send_json({"type": "state", "data": state})
             await asyncio.sleep(5)
     except WebSocketDisconnect:

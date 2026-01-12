@@ -28,7 +28,7 @@ export function EquityChart({ data }: EquityChartProps) {
         <Tooltip
           contentStyle={{ backgroundColor: '#1e1e1e', border: '1px solid #00ff9d' }}
           labelStyle={{ color: '#00ff9d' }}
-          formatter={(value: number) => `$${value.toLocaleString()}`}
+          formatter={(value: number | undefined) => value !== undefined ? `$${value.toLocaleString()}` : '-'}
         />
         <Line
           type="monotone"

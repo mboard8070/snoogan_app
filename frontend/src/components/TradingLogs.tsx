@@ -1,17 +1,29 @@
 import { useState, useEffect, useRef } from 'react'
 
-interface Position {
-  ticker?: string
+// Credit spread position (1m & 15m strategies)
+interface CreditSpreadPosition {
+  is_put?: boolean
+  short?: number        // Short strike
+  long?: number         // Long strike
+  credit?: number       // Credit received
+  contracts?: number
+  current_value?: number
+  best_value?: number
+  trail_active?: boolean
+}
+
+// Scalp position (long options)
+interface ScalpPosition {
   is_call?: boolean
   strike_price?: number
-  debit?: number
+  debit?: number        // Debit paid
   contracts?: number
+  current_mark?: number
   best_mark?: number
-  unrealized?: number
   trail_active?: boolean
-  trail_level?: number
-  entry_time?: string
 }
+
+type Position = CreditSpreadPosition & ScalpPosition & { ticker?: string }
 
 interface StrategyStatus {
   daily_pnl: number
@@ -21,8 +33,8 @@ interface StrategyStatus {
   current_trends: Record<string, string>
 }
 
-interface LogMessage {
-  type: string
+interface StateMessage {
+  type: 'state'
   data: {
     equity: number
     daily_pnl: number
@@ -37,6 +49,24 @@ interface LogMessage {
   }
 }
 
+interface TradeEvent {
+  type: 'trade'
+  data: {
+    timestamp: string
+    strategy: '1m' | '15m' | 'scalp'
+    event: 'entry' | 'exit'
+    ticker: string
+    type?: string      // CALL or PUT
+    strikes?: string   // For credit spreads
+    strike?: number    // For scalp
+    credit?: number    // For credit spreads
+    debit?: number     // For scalp
+    contracts?: number
+  }
+}
+
+type LogMessage = StateMessage | TradeEvent
+
 interface TradingLogsProps {
   wsUrl?: string
 }
@@ -50,7 +80,7 @@ export default function TradingLogs({ wsUrl }: TradingLogsProps) {
     '15m': [],
     'scalp': [],
   })
-  const [status, setStatus] = useState<LogMessage['data'] | null>(null)
+  const [status, setStatus] = useState<StateMessage['data'] | null>(null)
   const [connected, setConnected] = useState(false)
   const [activeStrategy, setActiveStrategy] = useState<StrategyType>('1m')
   const wsRef = useRef<WebSocket | null>(null)
@@ -80,18 +110,50 @@ export default function TradingLogs({ wsUrl }: TradingLogsProps) {
       ws.onmessage = (event) => {
         try {
           const msg: LogMessage = JSON.parse(event.data)
+
+          // Handle trade events from backend
+          if (msg.type === 'trade') {
+            const trade = msg.data
+            const time = new Date(trade.timestamp).toLocaleTimeString()
+            const strategy = trade.strategy as StrategyType
+
+            let logEntry: string
+            if (trade.event === 'entry') {
+              if (strategy === 'scalp') {
+                logEntry = `[${time}] ENTRY: ${trade.ticker} ${trade.type} ${trade.strike?.toFixed(0) || '?'} @ $${trade.debit?.toFixed(2) || '?'} x${trade.contracts || '?'}`
+              } else {
+                logEntry = `[${time}] ENTRY: ${trade.ticker} ${trade.type} spread ${trade.strikes || '?'} @ $${trade.credit?.toFixed(2) || '?'} x${trade.contracts || '?'}`
+              }
+            } else {
+              logEntry = `[${time}] EXIT: ${trade.ticker} position closed`
+            }
+
+            setLogs((prev) => ({
+              ...prev,
+              [strategy]: [...prev[strategy].slice(-99), logEntry],
+            }))
+            return
+          }
+
+          // Handle state updates
           if (msg.type === 'state') {
             setStatus(msg.data)
             const timestamp = new Date().toLocaleTimeString()
 
+            // Get current position counts for status line
             const pos1m = Object.keys(msg.data.positions_1m || {}).length
             const pos15m = Object.keys(msg.data.positions_15m || {}).length
             const posScalp = Object.keys(msg.data.positions_scalp || {}).length
 
+            // Get P&L for each strategy
+            const pnl1m = msg.data.status_1m?.daily_pnl ?? msg.data.daily_pnl ?? 0
+            const pnl15m = msg.data.status_15m?.daily_pnl ?? 0
+            const pnlScalp = msg.data.status_scalp?.daily_pnl ?? 0
+
             setLogs((prev) => ({
-              '1m': [...prev['1m'].slice(-99), `[${timestamp}] 1m Strategy - ${pos1m} positions, P&L: $${msg.data.daily_pnl}`],
-              '15m': [...prev['15m'].slice(-99), `[${timestamp}] 15m Strategy - ${pos15m} positions`],
-              'scalp': [...prev['scalp'].slice(-99), `[${timestamp}] Scalp Strategy - ${posScalp} positions`],
+              '1m': [...prev['1m'].slice(-99), `[${timestamp}] Status: ${pos1m} positions | P&L: $${pnl1m >= 0 ? '+' : ''}${pnl1m.toFixed(2)}`],
+              '15m': [...prev['15m'].slice(-99), `[${timestamp}] Status: ${pos15m} positions | P&L: $${pnl15m >= 0 ? '+' : ''}${pnl15m.toFixed(2)}`],
+              'scalp': [...prev['scalp'].slice(-99), `[${timestamp}] Status: ${posScalp} positions | P&L: $${pnlScalp >= 0 ? '+' : ''}${pnlScalp.toFixed(2)}`],
             }))
           }
         } catch {
@@ -149,6 +211,11 @@ export default function TradingLogs({ wsUrl }: TradingLogsProps) {
   const strategyStatus = getStatusForStrategy(activeStrategy)
   const trends = strategyStatus?.current_trends || {}
 
+  // Calculate total daily P&L from all strategies
+  const totalDailyPnl = (status?.status_1m?.daily_pnl || 0) +
+                        (status?.status_15m?.daily_pnl || 0) +
+                        (status?.status_scalp?.daily_pnl || 0)
+
   return (
     <div className="space-y-4">
       {/* Status Panel - Full stats like Streamlit */}
@@ -156,9 +223,9 @@ export default function TradingLogs({ wsUrl }: TradingLogsProps) {
         {/* Top row: P&L and limits */}
         <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-4">
           <div>
-            <p className="text-xs text-gray-400 uppercase">Daily P&L</p>
-            <p className={`text-xl font-bold ${(strategyStatus?.daily_pnl || 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-              ${(strategyStatus?.daily_pnl || 0) >= 0 ? '+' : ''}{(strategyStatus?.daily_pnl || 0).toFixed(2)}
+            <p className="text-xs text-gray-400 uppercase">Daily P&L (Total)</p>
+            <p className={`text-xl font-bold ${totalDailyPnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+              ${totalDailyPnl >= 0 ? '+' : ''}{totalDailyPnl.toFixed(2)}
             </p>
           </div>
           <div>
@@ -245,7 +312,8 @@ export default function TradingLogs({ wsUrl }: TradingLogsProps) {
           </h3>
           {positionList.length === 0 ? (
             <p className="text-gray-500 text-sm">No active positions</p>
-          ) : (
+          ) : activeStrategy === 'scalp' ? (
+            /* Scalp positions table (long options) */
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
@@ -253,20 +321,73 @@ export default function TradingLogs({ wsUrl }: TradingLogsProps) {
                     <th className="pb-2 text-left">Ticker</th>
                     <th className="pb-2 text-left">Type</th>
                     <th className="pb-2 text-right">Strike</th>
+                    <th className="pb-2 text-right">Debit</th>
                     <th className="pb-2 text-right">P&L</th>
+                    <th className="pb-2 text-right">P&L %</th>
+                    <th className="pb-2 text-center">Trail</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {positionList.map((pos) => (
-                    <tr key={pos.ticker} className="border-b border-gray-800">
-                      <td className="py-2 font-bold">{pos.ticker}</td>
-                      <td className="py-2">{pos.is_call ? 'CALL' : 'PUT'}</td>
-                      <td className="py-2 text-right">${pos.strike_price?.toFixed(0) || '-'}</td>
-                      <td className={`py-2 text-right font-bold ${(pos.unrealized || 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                        ${pos.unrealized?.toFixed(2) || '0.00'}
-                      </td>
-                    </tr>
-                  ))}
+                  {positionList.map((pos) => {
+                    const debit = pos.debit ?? 0
+                    const bestMark = pos.best_mark ?? pos.current_mark ?? debit
+                    const contracts = pos.contracts ?? 0
+                    const pnl = (bestMark - debit) * contracts * 100
+                    const pnlPct = debit > 0 ? ((bestMark - debit) / debit) * 100 : 0
+                    return (
+                      <tr key={pos.ticker} className="border-b border-gray-800">
+                        <td className="py-2 font-bold">{pos.ticker}</td>
+                        <td className="py-2">{pos.is_call ? 'CALL' : 'PUT'}</td>
+                        <td className="py-2 text-right">{pos.strike_price?.toFixed(0) || '-'}</td>
+                        <td className="py-2 text-right">${debit.toFixed(2)}</td>
+                        <td className={`py-2 text-right font-bold ${pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                          {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
+                        </td>
+                        <td className={`py-2 text-right font-bold ${pnlPct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                          {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(1)}%
+                        </td>
+                        <td className="py-2 text-center">{pos.trail_active ? '✓' : '-'}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            /* Credit spread positions table (1m & 15m strategies) */
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-700 text-gray-400 text-xs uppercase">
+                    <th className="pb-2 text-left">Ticker</th>
+                    <th className="pb-2 text-left">Type</th>
+                    <th className="pb-2 text-right">Strikes</th>
+                    <th className="pb-2 text-right">Credit</th>
+                    <th className="pb-2 text-right">Qty</th>
+                    <th className="pb-2 text-right">P&L</th>
+                    <th className="pb-2 text-center">Trail</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {positionList.map((pos) => {
+                    const credit = pos.credit ?? 0
+                    const bestValue = pos.best_value ?? pos.current_value ?? credit
+                    const contracts = pos.contracts ?? 0
+                    const pnl = (credit - bestValue) * contracts * 100
+                    return (
+                      <tr key={pos.ticker} className="border-b border-gray-800">
+                        <td className="py-2 font-bold">{pos.ticker}</td>
+                        <td className="py-2">{pos.is_put ? 'PUT' : 'CALL'}</td>
+                        <td className="py-2 text-right">{pos.short?.toFixed(0) || '-'}/{pos.long?.toFixed(0) || '-'}</td>
+                        <td className="py-2 text-right">${credit.toFixed(2)}</td>
+                        <td className="py-2 text-right">{contracts}</td>
+                        <td className={`py-2 text-right font-bold ${pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                          {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
+                        </td>
+                        <td className="py-2 text-center">{pos.trail_active ? '✓' : '-'}</td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>

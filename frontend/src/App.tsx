@@ -12,7 +12,9 @@ import LiveCharts from './components/LiveCharts'
 interface DashboardState {
   equity?: number
   daily_pnl?: number
-  trade_count?: number
+  trade_count?: number      // Current batch count (0-30)
+  total_learned?: number    // Total archived trades
+  batch_size?: number       // Batch size (30)
   market_open?: boolean
   equity_history?: number[]
   positions_1m?: Record<string, any>
@@ -71,7 +73,9 @@ function App() {
   // Safe defaults
   const equity = state.equity ?? 0
   const daily_pnl = state.daily_pnl ?? 0
-  const trade_count = state.trade_count ?? 0
+  const trade_count = state.trade_count ?? 0  // Current batch (0-30)
+  const total_learned = state.total_learned ?? 0  // Total archived
+  const batch_size = state.batch_size ?? 30
   const market_open = state.market_open ?? false
 
   const tabs: { id: TabType; label: string }[] = [
@@ -123,15 +127,18 @@ function App() {
             <div className="bg-surface rounded-lg p-4 border border-gray-700">
               <h2 className="text-xs text-gray-400 uppercase tracking-wide">Brain Progress</h2>
               <div className="flex items-center gap-2">
-                <p className="text-xl font-bold">{trade_count % 30}/30</p>
+                <p className="text-xl font-bold">{trade_count}/{batch_size}</p>
                 <div className="flex-1 bg-gray-800 rounded-full h-3">
                   <div
                     className="bg-accent h-3 rounded-full transition-all"
-                    style={{ width: `${((trade_count % 30) / 30) * 100}%` }}
+                    style={{ width: `${(trade_count / batch_size) * 100}%` }}
                   />
                 </div>
               </div>
-              <p className="text-xs text-gray-500">{Math.floor(trade_count / 30)} batches</p>
+              <div className="flex justify-between text-xs text-gray-500 mt-1">
+                <span>Total Learned: {total_learned}</span>
+                <span>{batch_size - trade_count} until update</span>
+              </div>
             </div>
             <div className="bg-surface rounded-lg p-4 border border-gray-700">
               <h2 className="text-xs text-gray-400 uppercase tracking-wide">Market</h2>

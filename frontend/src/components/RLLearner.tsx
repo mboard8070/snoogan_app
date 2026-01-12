@@ -24,10 +24,10 @@ interface StateInfo {
 
 interface Decision {
   timestamp: string
-  state: string
+  state_key: string      // Field name from adaptive_learner
   action: string
   reward?: number
-  explored?: boolean
+  exploration?: boolean  // Field name from adaptive_learner
 }
 
 interface DecisionSummary {
@@ -264,7 +264,7 @@ export default function RLLearner() {
               <tbody>
                 {data.recent_decisions.map((d, i) => {
                   const timestamp = d.timestamp ? d.timestamp.slice(-8) : 'N/A'
-                  const stateShort = d.state ? d.state.slice(0, 25) : 'N/A'
+                  const stateShort = d.state_key ? d.state_key.slice(0, 25) : 'N/A'
                   return (
                     <tr key={i} className="border-b border-gray-800">
                       <td className="py-2 text-gray-400 text-xs font-mono">
@@ -277,7 +277,7 @@ export default function RLLearner() {
                         {d.action?.toUpperCase() ?? 'N/A'}
                       </td>
                       <td className="py-2 text-center text-yellow-400 font-bold">
-                        {d.explored ? 'Y' : ''}
+                        {d.exploration ? 'Y' : ''}
                       </td>
                     </tr>
                   )
