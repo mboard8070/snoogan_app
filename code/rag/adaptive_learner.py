@@ -85,6 +85,9 @@ class AdaptiveLearner:
         self.decision_history: List[Dict] = []
         self.max_history = 100
 
+        # Track file modification time for auto-reload in multi-process environments
+        self._last_loaded_mtime: float = 0.0
+
         # Load existing state
         self._load_state()
 
@@ -474,6 +477,7 @@ class AdaptiveLearner:
 
     def get_stats(self) -> Dict:
         """Get learner statistics."""
+        self._check_and_reload()
         total = self.stats["total_trades"]
         wins = self.stats["enter_wins"]
         good_skips = self.stats.get("counterfactual_good_skips", 0)
@@ -501,10 +505,12 @@ class AdaptiveLearner:
 
     def get_recent_decisions(self, n: int = 20) -> List[Dict]:
         """Get the N most recent decisions for monitoring."""
+        self._check_and_reload()
         return self.decision_history[-n:]
 
     def get_decision_summary(self) -> Dict:
         """Get summary of recent decisions."""
+        self._check_and_reload()
         if not self.decision_history:
             return {"total": 0, "enters": 0, "skips": 0, "explorations": 0, "enter_rate": 0, "exploration_rate": 0}
 
@@ -566,6 +572,7 @@ class AdaptiveLearner:
 
     def get_best_states(self, n: int = 10) -> list:
         """Get the top N states by Q-value for entering."""
+        self._check_and_reload()
         states = []
         for state_key, q_vals in self.q_table.items():
             states.append({
@@ -581,6 +588,7 @@ class AdaptiveLearner:
 
     def get_worst_states(self, n: int = 10) -> list:
         """Get the bottom N states (where skipping is favored)."""
+        # Note: _check_and_reload() is called in get_best_states()
         states = self.get_best_states(n=1000)  # Get all
         states.reverse()
         return states[:n]
@@ -605,6 +613,25 @@ class AdaptiveLearner:
         except Exception as e:
             logger.error(f"Failed to save learner state: {e}")
 
+    def _check_and_reload(self):
+        """Check if state file has been modified by another process and reload if needed.
+
+        This handles multi-process environments where one process (e.g., trading strategy)
+        updates the state file while another process (e.g., API server) has a stale
+        in-memory singleton.
+        """
+        if not STATE_FILE.exists():
+            return
+
+        try:
+            current_mtime = STATE_FILE.stat().st_mtime
+            if current_mtime > self._last_loaded_mtime:
+                logger.info(f"State file modified externally, reloading "
+                           f"(file mtime: {current_mtime}, last loaded: {self._last_loaded_mtime})")
+                self._load_state()
+        except Exception as e:
+            logger.warning(f"Error checking state file modification time: {e}")
+
     def _load_state(self):
         """Load Q-table and stats from disk."""
         if not STATE_FILE.exists():
@@ -612,8 +639,14 @@ class AdaptiveLearner:
             return
 
         try:
+            # Record file modification time before loading
+            self._last_loaded_mtime = STATE_FILE.stat().st_mtime
+
             with open(STATE_FILE, "r") as f:
                 state = json.load(f)
+
+            # Clear existing Q-table before loading (handles removed states)
+            self.q_table.clear()
 
             # Restore Q-table
             for key, vals in state.get("q_table", {}).items():
