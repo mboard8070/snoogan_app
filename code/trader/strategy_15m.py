@@ -7,6 +7,7 @@ import os
 import json
 import pandas as pd
 import logging
+import time as time_mod
 from pathlib import Path
 from datetime import datetime, timedelta, time, date
 from zoneinfo import ZoneInfo
@@ -36,10 +37,11 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 STATE_FILE = PROJECT_ROOT / "strategy_15m_state.json"
 LOCK_FILE = PROJECT_ROOT / "strategy_15m_state.json.lock"
 SHARED_EQUITY_FILE = PROJECT_ROOT / "shared_equity.json"
+SHARED_EQUITY_HISTORY_FILE = PROJECT_ROOT / "shared_equity_history.json"
 
 
 def update_shared_equity(realized_pnl: float) -> None:
-    """Update the shared equity file with realized PnL."""
+    """Update the shared equity file with realized PnL and append to history."""
     try:
         current_equity = 100000.0  # Default starting balance
         if SHARED_EQUITY_FILE.exists():
@@ -53,6 +55,21 @@ def update_shared_equity(realized_pnl: float) -> None:
                 'equity': new_equity,
                 'last_updated': datetime.now(EST).isoformat()
             }, f, indent=2)
+
+        # Append to shared equity history
+        try:
+            history = []
+            if SHARED_EQUITY_HISTORY_FILE.exists():
+                with open(SHARED_EQUITY_HISTORY_FILE, 'r') as f:
+                    history = json.load(f)
+            history.append(new_equity)
+            # Keep last 500 entries
+            history = history[-500:]
+            with open(SHARED_EQUITY_HISTORY_FILE, 'w') as f:
+                json.dump(history, f)
+        except Exception as he:
+            logger.error(f"Failed to update equity history: {he}")
+
         logger.debug(f"Updated shared equity: ${current_equity:.2f} + ${realized_pnl:.2f} = ${new_equity:.2f}")
     except Exception as e:
         logger.error(f"Failed to update shared equity: {e}")
@@ -75,12 +92,13 @@ NYSE_HOLIDAYS_2026 = {
 
 class TradingStrategy15m:
     """15-minute timeframe vertical credit spread strategy"""
-    
+
     def __init__(self):
         self.prefix = "[15m]"
         self._strategy_ready_sent = False
         self.trades_today = []
         self.current_trends = {}  # Track current trend for each ticker
+        self._cache = {}  # Simple in-memory cache: key -> (timestamp, data)
 
         # Load state with error handling
         try:
@@ -385,10 +403,16 @@ class TradingStrategy15m:
 
     def _process_ticker(self, ticker: str, now: datetime):
         """Process a single ticker for entry or monitoring"""
-        
-        # Fetch minute bars
-        minute_bars = self._fetch_minute_bars(ticker, now)
-        if minute_bars is None:
+
+        # Fetch minute bars with caching
+        minute_bars = self._cached_fetch(
+            ('bars', ticker),
+            lambda: data_client.get_spy_bars(now - timedelta(days=7), now, ticker=ticker),
+            ttl=10
+        )
+
+        if minute_bars is None or minute_bars.empty or len(minute_bars) < 20:
+            logger.debug(f"{self.prefix} [{ticker}] Insufficient minute bars")
             return
 
         # Resample to 15-minute bars
@@ -405,9 +429,14 @@ class TradingStrategy15m:
             logger.error(f"{self.prefix} [{ticker}] Error calculating trend: {e}")
             return
 
-        # Fetch option chain
-        chain = self._fetch_option_chain(ticker, now.strftime("%Y-%m-%d"))
-        if chain is None:
+        # Fetch option chain with caching
+        chain = self._cached_fetch(
+            ('chain', ticker),
+            lambda: data_client.get_spy_option_chain(now.strftime("%Y-%m-%d"), ticker=ticker),
+            ttl=8
+        )
+        if chain is None or chain.empty:
+            logger.debug(f"{self.prefix} [{ticker}] No option chain")
             return
 
         logger.debug(f"{self.prefix} [{ticker}] Price: ${price:.2f} | Trend: {trend}")
@@ -451,15 +480,34 @@ class TradingStrategy15m:
                 'close': 'last',
                 'volume': 'sum'
             }).dropna()
-            
+
             if bars_15m.empty or len(bars_15m) < 20:
                 logger.debug(f"{self.prefix} Insufficient 15m bars after resampling")
                 return None
-                
+
             return bars_15m
-            
+
         except Exception as e:
             logger.error(f"{self.prefix} Error resampling bars: {e}")
+            return None
+
+    def _cached_fetch(self, key: Tuple, fetch_func, ttl: int = 10):
+        """Simple cache with TTL to reduce API calls"""
+        now = time_mod.time()
+
+        if key in self._cache:
+            ts, data = self._cache[key]
+            if now - ts < ttl:
+                logger.debug(f"{self.prefix} Cache hit for {key}")
+                return data
+
+        try:
+            data = fetch_func()
+            if data is not None:
+                self._cache[key] = (now, data)
+            return data
+        except Exception as e:
+            logger.error(f"{self.prefix} Error in cached fetch for {key}: {e}")
             return None
 
     def _fetch_option_chain(self, ticker: str, expiration: str) -> Optional[pd.DataFrame]:
@@ -751,8 +799,31 @@ class TradingStrategy15m:
                 logger.error(f"{self.prefix} Error managing {ticker}: {e}", exc_info=True)
 
     def _manage_single_position(self, ticker: str, pos: Dict, now: datetime):
-        """Manage a single position"""
-        
+        """Manage a single position with underlying refresh"""
+
+        # Fetch fresh bars for underlying price and indicators
+        bars = self._cached_fetch(
+            ('bars', ticker),
+            lambda: data_client.get_spy_bars(now - timedelta(days=7), now, ticker=ticker),
+            ttl=10
+        )
+
+        # Get underlying price and calculate 15m indicators
+        underlying_price = None
+        trend = None
+        if bars is not None and not bars.empty and len(bars) >= 20:
+            underlying_price = bars['close'].iloc[-1]
+            pos["underlying_price"] = underlying_price
+
+            # Resample to 15m for indicators
+            bars_15m = self._resample_to_15min(bars)
+            if bars_15m is not None:
+                try:
+                    trend = get_trend_signal(bars_15m, None, None)
+                    self.current_trends[ticker] = trend
+                except Exception as e:
+                    logger.debug(f"{self.prefix} [{ticker}] Error calculating trend: {e}")
+
         current_value = self._get_current_spread_mark(ticker, pos)
 
         if current_value is None:
@@ -765,10 +836,14 @@ class TradingStrategy15m:
         credit = pos["credit"]
         unrealized = (credit - current_value) * pos["contracts"] * 100
 
+        # Enhanced logging with underlying price
+        price_str = f"${underlying_price:.2f}" if underlying_price else "N/A"
+        trend_str = trend if trend else "N/A"
         logger.info(f"{self.prefix} [{ticker}] {'PUT' if pos['is_put'] else 'CALL'} "
                    f"{pos['short']:.1f}/{pos['long']:.1f} | "
                    f"Entry: ${credit:.2f} | Current: ${current_value:.2f} | "
-                   f"Unrealized: ${unrealized:+.2f}")
+                   f"Unrealized: ${unrealized:+.2f} | "
+                   f"Underlying: {price_str} | Trend: {trend_str}")
 
         # Update best value and trailing stop
         if current_value < pos["best_value"]:
@@ -800,21 +875,32 @@ class TradingStrategy15m:
             exit_reason = "time_exit"
             logger.info(f"{self.prefix} [{ticker}] Time-based exit (after 2:30 PM)")
 
-        # 3. Profit target: 50% of credit (activates trailing)
-        elif (credit - current_value) >= 0.5 * credit:
+        # 3. Trend reversal exit (put spread in bear trend, call spread in bull trend)
+        elif trend is not None:
+            if pos["is_put"] and trend == "bear":
+                realized = (credit - current_value) * pos["contracts"] * 100
+                exit_reason = f"trend_reversal → {trend}"
+                logger.info(f"{self.prefix} [{ticker}] Trend reversal exit (PUT spread, trend={trend})")
+            elif not pos["is_put"] and trend == "bull":
+                realized = (credit - current_value) * pos["contracts"] * 100
+                exit_reason = f"trend_reversal → {trend}"
+                logger.info(f"{self.prefix} [{ticker}] Trend reversal exit (CALL spread, trend={trend})")
+
+        # 4. Profit target: 50% of credit (activates trailing)
+        if realized is None and (credit - current_value) >= 0.5 * credit:
             if not pos["trail_active"]:
                 pos["trail_active"] = True
                 pos["trail_level"] = pos["best_value"] * 1.10
                 logger.info(f"{self.prefix} [{ticker}] 50% profit - trailing stop "
                           f"activated @ ${pos['trail_level']:.2f}")
 
-        # 4. Check trailing stop (must be OUTSIDE the 50% profit condition)
+        # 5. Check trailing stop (must be OUTSIDE the 50% profit condition)
         if pos["trail_active"] and current_value >= pos["trail_level"]:
             realized = (credit - current_value) * pos["contracts"] * 100
             exit_reason = "trailing_stop"
             logger.info(f"{self.prefix} [{ticker}] Trailing stop hit")
 
-        # 5. Hard profit target: 80% of credit (take profits, let winners run but cap)
+        # 6. Hard profit target: 80% of credit (take profits, let winners run but cap)
         if realized is None and (credit - current_value) >= 0.8 * credit:
             realized = (credit - current_value) * pos["contracts"] * 100
             exit_reason = "profit_target_80"

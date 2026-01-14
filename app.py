@@ -1,5 +1,5 @@
 """
-Snoogans Trading Dashboard
+Iron Spark Trading Dashboard
 A Streamlit-based trading dashboard with multiple strategy timeframes,
 RAG-powered chat, and Discord notifications.
 """
@@ -26,7 +26,7 @@ from dotenv import load_dotenv
 @dataclass(frozen=True)
 class AppConfig:
     """Application configuration constants."""
-    PAGE_TITLE: str = "Snoogans"
+    PAGE_TITLE: str = "Iron Spark"
     LAYOUT: str = "wide"
     SIDEBAR_STATE: str = "collapsed"
 
@@ -38,7 +38,7 @@ class AppConfig:
 
     HEADER_REFRESH_SECONDS: int = 10
     STRATEGY_1M_REFRESH_SECONDS: int = 12
-    STRATEGY_15M_REFRESH_SECONDS: int = 900
+    STRATEGY_15M_REFRESH_SECONDS: int = 12  # Frequent refresh for P&L tracking (uses 15m bars for indicators)
     STRATEGY_15M_MONITOR_SECONDS: int = 60  # Position monitoring between full cycles
     STRATEGY_SCALP_REFRESH_SECONDS: int = 60
     LEARNER_REFRESH_SECONDS: int = 60
@@ -71,6 +71,7 @@ TRADES_FILE = KNOWLEDGE_DIR / "trades.json"
 ARCHIVE_DIR = PROJECT_ROOT / "data" / "knowledge"  # Archived batches go here
 ENV_PATH = PROJECT_ROOT / "variables.env"
 SHARED_EQUITY_FILE = PROJECT_ROOT / "shared_equity.json"
+SHARED_EQUITY_HISTORY_FILE = PROJECT_ROOT / "shared_equity_history.json"
 
 # Add required paths to sys.path
 _paths_to_add = [
@@ -136,6 +137,20 @@ def update_shared_equity(new_equity: float) -> None:
     }
     with open(SHARED_EQUITY_FILE, 'w') as f:
         json.dump(data, f, indent=2)
+
+
+def get_shared_equity_history() -> list:
+    """Read the shared equity history from the JSON file."""
+    if SHARED_EQUITY_HISTORY_FILE.exists():
+        try:
+            with open(SHARED_EQUITY_HISTORY_FILE, 'r') as f:
+                history = json.load(f)
+                if isinstance(history, list):
+                    return history
+        except (json.JSONDecodeError, KeyError):
+            pass
+    # Return starting balance as initial history if no history exists
+    return [float(os.getenv("STARTING_BALANCE", "100000"))]
 
 
 # =============================================================================
@@ -648,7 +663,7 @@ def render_chat_interface(container: Any) -> None:
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
     
-    if prompt := st.chat_input("Ask Snoogans..."):
+    if prompt := st.chat_input("Ask Iron Spark..."):
         st.session_state.chat.append({"role": "user", "content": prompt})
         
         with st.chat_message("assistant"):
@@ -668,7 +683,7 @@ def render_left_column() -> None:
     st.subheader("Performance & Position")
 
     st.line_chart(
-        pd.Series(st.session_state.strategy_1m.equity_history, name="Equity"),
+        pd.Series(get_shared_equity_history(), name="Equity"),
         height=CONFIG.EQUITY_CHART_HEIGHT,
     )
 
@@ -691,7 +706,7 @@ def render_left_column() -> None:
 
 def render_right_column() -> None:
     """Render the right column with chat and trading logs."""
-    tab_chat, tab_logs, tab_learner = st.tabs(["💬 Snoogans Chat", "📜 Trading Logs", "🧠 RL Learner"])
+    tab_chat, tab_logs, tab_learner = st.tabs(["💬 Iron Spark Chat", "📜 Trading Logs", "🧠 RL Learner"])
 
     with tab_chat:
         render_chat_interface(tab_chat)
@@ -811,7 +826,7 @@ def render_trading_logs() -> None:
     st.write(f"Last Heartbeat: {datetime.now().strftime('%H:%M:%S')}")
     
     # 1-Minute Strategy Log
-    st.subheader("🖥️ 1-Minute Snoogans Log")
+    st.subheader("🖥️ 1-Minute Iron Spark Log")
     log_display_1m = st.empty()
     
     @st.fragment(run_every=CONFIG.STRATEGY_1M_REFRESH_SECONDS)
@@ -837,18 +852,28 @@ def render_trading_logs() -> None:
         log_display_1m.code(combined_output, language="bash", wrap_lines=True)
 
         send_greeting_if_needed()
-        # Calculate trades_today from closed_trades with today's exit_time
+        # Calculate TOTAL trades_today and daily_pnl from ALL strategies for EOD notification
         today_str = date.today().isoformat()
         closed_trades_1m = getattr(st.session_state.strategy_1m, 'closed_trades', [])
-        today_trades = sum(1 for t in closed_trades_1m if t.get('exit_time', '').startswith(today_str))
-        daily_pnl = st.session_state.strategy_1m.daily_pnl
-        send_eod_if_needed(today_trades, daily_pnl)
+        closed_trades_15m = getattr(st.session_state.strategy_15m, 'closed_trades', [])
+        closed_trades_scalp = getattr(st.session_state.strategy_scalp, 'closed_trades', [])
+        total_trades_today = (
+            sum(1 for t in closed_trades_1m if t.get('exit_time', '').startswith(today_str)) +
+            sum(1 for t in closed_trades_15m if t.get('exit_time', '').startswith(today_str)) +
+            sum(1 for t in closed_trades_scalp if t.get('exit_time', '').startswith(today_str))
+        )
+        total_daily_pnl = (
+            st.session_state.strategy_1m.daily_pnl +
+            st.session_state.strategy_15m.daily_pnl +
+            st.session_state.strategy_scalp.daily_pnl
+        )
+        send_eod_if_needed(total_trades_today, total_daily_pnl)
         refresh_dashboard_state()
 
     sync_1m_cycle()
 
     # 15-Minute Strategy Log
-    st.subheader("🖥️ 15-Minute Snoogans Log")
+    st.subheader("🖥️ 15-Minute Iron Spark Log")
     log_display_15m = st.empty()
 
     @st.fragment(run_every=CONFIG.STRATEGY_15M_REFRESH_SECONDS)
@@ -874,12 +899,7 @@ def render_trading_logs() -> None:
         log_display_15m.code(combined_output, language="bash", wrap_lines=True)
 
         send_greeting_if_needed()
-        # Calculate trades_today from closed_trades with today's exit_time
-        today_str = date.today().isoformat()
-        closed_trades_15m = getattr(st.session_state.strategy_15m, 'closed_trades', [])
-        today_trades = sum(1 for t in closed_trades_15m if t.get('exit_time', '').startswith(today_str))
-        daily_pnl = st.session_state.strategy_15m.daily_pnl
-        send_eod_if_needed(today_trades, daily_pnl)
+        # EOD notification is sent from 1m strategy section with combined totals
         refresh_dashboard_state()
 
     sync_15m_cycle()
@@ -896,7 +916,7 @@ def render_trading_logs() -> None:
     monitor_15m_positions()
 
     # Scalp Strategy Log
-    st.subheader("🖥️ Scalp Snoogans Log")
+    st.subheader("🖥️ Scalp Iron Spark Log")
     log_display_scalp = st.empty()
 
     @st.fragment(run_every=CONFIG.STRATEGY_SCALP_REFRESH_SECONDS)
@@ -922,12 +942,7 @@ def render_trading_logs() -> None:
         log_display_scalp.code(combined_output, language="bash", wrap_lines=True)
 
         send_greeting_if_needed()
-        # Calculate trades_today from closed_trades with today's exit_time
-        today_str = date.today().isoformat()
-        closed_trades_scalp = getattr(st.session_state.strategy_scalp, 'closed_trades', [])
-        today_trades = sum(1 for t in closed_trades_scalp if t.get('exit_time', '').startswith(today_str))
-        daily_pnl = st.session_state.strategy_scalp.daily_pnl
-        send_eod_if_needed(today_trades, daily_pnl)
+        # EOD notification is sent from 1m strategy section with combined totals
         refresh_dashboard_state()
 
     sync_scalp_cycle()
