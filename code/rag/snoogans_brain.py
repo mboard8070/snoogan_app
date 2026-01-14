@@ -117,6 +117,25 @@ class SnoogansBrain:
                 except (json.JSONDecodeError, IOError) as e:
                     print(f"WARNING: Could not load trades.json: {e}")
 
+        # Load live trades from strategy state files (not yet batched)
+        state_files = [
+            (os.path.join(BASE_DIR, "strategy_15m_state.json"), "15m"),
+            (os.path.join(BASE_DIR, "code", "strategy_state.json"), "1m"),
+            (os.path.join(BASE_DIR, "code", "trader", "scalp_strategy_state.json"), "scalp"),
+        ]
+
+        for state_file, strategy_name in state_files:
+            if os.path.exists(state_file):
+                try:
+                    with open(state_file, 'r') as f:
+                        state = json.load(f)
+                        closed_trades = state.get('closed_trades', [])
+                        for trade in closed_trades:
+                            trade['_source'] = f'{strategy_name}_live'
+                        all_trades.extend(closed_trades)
+                except (json.JSONDecodeError, IOError) as e:
+                    print(f"WARNING: Could not load {state_file}: {e}")
+
         return all_trades
 
     def _analyze_trades(self, trades: list) -> dict:
