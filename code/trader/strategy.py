@@ -16,7 +16,7 @@ from typing import Optional, Dict, Any, Tuple, List
 
 # Import your existing modules
 from code.data.data_client import data_client
-from indicators import get_trend_signal, train_lstm_daily, get_full_indicator_set
+from indicators import get_trend_signal, train_lstm_daily, get_full_indicator_set, get_volatility_regime
 from discord_notifier import send_entry, send_exit, set_strategy_ready
 
 # Configure logging - use INFO for production, DEBUG for troubleshooting
@@ -36,10 +36,11 @@ PROJECT_ROOT = Path(__file__).parent.parent
 STATE_FILE = PROJECT_ROOT / "strategy_state.json"
 LOCK_FILE = PROJECT_ROOT / "strategy_state.json.lock"
 SHARED_EQUITY_FILE = PROJECT_ROOT.parent / "shared_equity.json"
+SHARED_EQUITY_HISTORY_FILE = PROJECT_ROOT.parent / "shared_equity_history.json"
 
 
 def update_shared_equity(realized_pnl: float) -> None:
-    """Update the shared equity file with realized PnL."""
+    """Update the shared equity file with realized PnL and append to history."""
     try:
         current_equity = 100000.0  # Default starting balance
         if SHARED_EQUITY_FILE.exists():
@@ -53,6 +54,21 @@ def update_shared_equity(realized_pnl: float) -> None:
                 'equity': new_equity,
                 'last_updated': datetime.now(EST).isoformat()
             }, f, indent=2)
+
+        # Append to shared equity history
+        try:
+            history = []
+            if SHARED_EQUITY_HISTORY_FILE.exists():
+                with open(SHARED_EQUITY_HISTORY_FILE, 'r') as f:
+                    history = json.load(f)
+            history.append(new_equity)
+            # Keep last 500 entries
+            history = history[-500:]
+            with open(SHARED_EQUITY_HISTORY_FILE, 'w') as f:
+                json.dump(history, f)
+        except Exception as he:
+            logger.error(f"Failed to update equity history: {he}")
+
         logger.debug(f"Updated shared equity: ${current_equity:.2f} + ${realized_pnl:.2f} = ${new_equity:.2f}")
     except Exception as e:
         logger.error(f"Failed to update shared equity: {e}")
@@ -256,12 +272,13 @@ class TradingStrategy:
         """Check if we should be more selective (daily PnL >= $1000)"""
         return self.daily_pnl >= 1000.0
 
-    def _calculate_position_size(self, confidence: float = 50.0, win_rate: float = 50.0) -> int:
+    def _calculate_position_size(self, confidence: float = 50.0, win_rate: float = 50.0, vol_regime: dict = None) -> int:
         """
         Scale position size 5-20 contracts based on:
         - Confidence score (0-100) - from brain or indicators
         - Historical win rate for this pattern (0-100)
         - Daily P&L (reduce size if losing, cap if winning big)
+        - Volatility regime (reduce size in low vol conditions)
         """
         base = 5  # Minimum contracts
 
@@ -280,6 +297,19 @@ class TradingStrategy:
             size_cap = 15  # Conservative when up big (protect gains)
         else:
             size_cap = 20  # Full range available
+
+        # Volatility-based reduction (even if not blocking, reduce size in marginal conditions)
+        if vol_regime:
+            atr_pct = vol_regime.get("atr_pct", 0.003)
+            range_ratio = vol_regime.get("daily_range_ratio", 1.0)
+
+            # Reduce size when volatility is borderline (not blocking, but be cautious)
+            if atr_pct < 0.002:  # ATR < 0.2%
+                size_cap = min(size_cap, 10)
+                logger.debug(f"{self.prefix} Vol reduction: ATR {atr_pct*100:.2f}% → cap {size_cap}")
+            if range_ratio < 0.6:  # Range < 60% of ADR
+                size_cap = min(size_cap, 8)
+                logger.debug(f"{self.prefix} Vol reduction: Range {range_ratio:.0%} → cap {size_cap}")
 
         calculated = min(base + confidence_bonus + wr_bonus, size_cap)
         logger.debug(f"{self.prefix} Position size: {calculated} contracts "
@@ -409,13 +439,21 @@ class TradingStrategy:
         if chain is None:
             return
 
-        logger.debug(f"{self.prefix} [{ticker}] Price: ${price:.2f} | Trend: {trend}")
+        # Check volatility regime before entry
+        vol_regime = get_volatility_regime(minute_bars)
+        logger.debug(f"{self.prefix} [{ticker}] Price: ${price:.2f} | Trend: {trend} | "
+                    f"ATR: {vol_regime['atr_pct']*100:.2f}% | Range: {vol_regime['daily_range_ratio']:.0%}")
 
         # Entry logic
         if ticker not in self.positions:
+            # Volatility gate: skip entry on flat days
+            if vol_regime.get("is_low_vol", False):
+                logger.info(f"{self.prefix} [{ticker}] LOW VOL - skipping entry: {vol_regime['reason']}")
+                return
+
             if trend != "chop" and self.can_enter_trades():
                 try:
-                    self._attempt_entry(ticker, trend, chain, price, minute_bars)
+                    self._attempt_entry(ticker, trend, chain, price, minute_bars, vol_regime)
                 except Exception as e:
                     logger.error(f"{self.prefix} [{ticker}] Entry error: {e}", exc_info=True)
         else:
@@ -490,7 +528,7 @@ class TradingStrategy:
             logger.error(f"{self.prefix} Error calculating spread price: {e}")
             return None
 
-    def _attempt_entry(self, ticker: str, trend: str, chain: pd.DataFrame, price: float, bars: pd.DataFrame = None):
+    def _attempt_entry(self, ticker: str, trend: str, chain: pd.DataFrame, price: float, bars: pd.DataFrame = None, vol_regime: dict = None):
         """Attempt to enter a new credit spread position"""
 
         conservative = self.is_conservative_mode()
@@ -573,7 +611,7 @@ class TradingStrategy:
         # Use trend_strength as confidence proxy (scaled 0-100)
         trend_strength = abs(indicators.get("trend_strength", 0.0))
         confidence = min(100, trend_strength * 100 + 50)  # Center at 50, scale up
-        contracts = self._calculate_position_size(confidence=confidence, win_rate=50.0)
+        contracts = self._calculate_position_size(confidence=confidence, win_rate=50.0, vol_regime=vol_regime)
 
         # Store position with market context for learning
         self.positions[ticker] = {
@@ -726,8 +764,18 @@ class TradingStrategy:
                 logger.error(f"{self.prefix} Error managing {ticker}: {e}", exc_info=True)
 
     def _manage_single_position(self, ticker: str, pos: Dict, now: datetime):
-        """Manage a single position"""
-        
+        """Manage a single position with trend monitoring for chop-exit"""
+
+        # Fetch fresh bars for trend calculation (like 15m strategy does)
+        bars = self._fetch_minute_bars(ticker, now)
+        trend = None
+        if bars is not None and len(bars) >= 20:
+            try:
+                trend = get_trend_signal(bars, None, None)
+                self.current_trends[ticker] = trend
+            except Exception as e:
+                logger.debug(f"{self.prefix} [{ticker}] Error calculating trend: {e}")
+
         current_value = self._get_current_mark(ticker, pos)
 
         if current_value is None:
@@ -740,10 +788,11 @@ class TradingStrategy:
         credit = pos["credit"]
         unrealized = (credit - current_value) * pos["contracts"] * 100
 
+        trend_str = trend if trend else "N/A"
         logger.info(f"{self.prefix} [{ticker}] {'PUT' if pos['is_put'] else 'CALL'} "
                    f"{pos['short']:.1f}/{pos['long']:.1f} | "
                    f"Entry: ${credit:.2f} | Current: ${current_value:.2f} | "
-                   f"Unrealized: ${unrealized:+.2f}")
+                   f"Unrealized: ${unrealized:+.2f} | Trend: {trend_str}")
 
         # Update best value and trailing stop
         if current_value < pos["best_value"]:
@@ -769,13 +818,29 @@ class TradingStrategy:
             exit_reason = "stop_loss"
             logger.warning(f"{self.prefix} [{ticker}] Stop loss hit (2x credit)")
 
-        # 2. Time-based exit after 2:30 PM
+        # 2. Chop exit: trend became choppy
+        elif trend == "chop":
+            realized = (credit - current_value) * pos["contracts"] * 100
+            exit_reason = "trend_to_chop"
+            logger.info(f"{self.prefix} [{ticker}] Chop exit - trend became choppy")
+
+        # 3. Trend reversal exit (PUT spread in bear trend, CALL spread in bull trend)
+        elif trend is not None and pos["is_put"] and trend == "bear":
+            realized = (credit - current_value) * pos["contracts"] * 100
+            exit_reason = f"trend_reversal → {trend}"
+            logger.info(f"{self.prefix} [{ticker}] Trend reversal exit (PUT spread, trend={trend})")
+        elif trend is not None and not pos["is_put"] and trend == "bull":
+            realized = (credit - current_value) * pos["contracts"] * 100
+            exit_reason = f"trend_reversal → {trend}"
+            logger.info(f"{self.prefix} [{ticker}] Trend reversal exit (CALL spread, trend={trend})")
+
+        # 4. Time-based exit after 2:30 PM
         elif now.time() >= time(14, 30):
             realized = (credit - current_value) * pos["contracts"] * 100
             exit_reason = "time_exit"
             logger.info(f"{self.prefix} [{ticker}] Time-based exit (after 2:30 PM)")
 
-        # 3. Profit target: 50% of credit (activates trailing)
+        # 5. Profit target: 50% of credit (activates trailing)
         elif (credit - current_value) >= 0.5 * credit:
             if not pos["trail_active"]:
                 pos["trail_active"] = True
@@ -783,13 +848,13 @@ class TradingStrategy:
                 logger.info(f"{self.prefix} [{ticker}] 50% profit - trailing stop "
                           f"activated @ ${pos['trail_level']:.2f}")
 
-        # 4. Check trailing stop (must be OUTSIDE the 50% profit condition)
+        # 6. Check trailing stop (must be OUTSIDE the 50% profit condition)
         if pos["trail_active"] and current_value >= pos["trail_level"]:
             realized = (credit - current_value) * pos["contracts"] * 100
             exit_reason = "trailing_stop"
             logger.info(f"{self.prefix} [{ticker}] Trailing stop hit")
 
-        # 5. Hard profit target: 80% of credit (take profits, let winners run but cap)
+        # 7. Hard profit target: 80% of credit (take profits, let winners run but cap)
         if realized is None and (credit - current_value) >= 0.8 * credit:
             realized = (credit - current_value) * pos["contracts"] * 100
             exit_reason = "profit_target_80"

@@ -585,6 +585,121 @@ def get_full_indicator_set(bars: pd.DataFrame) -> dict:
     }
 
 
+# Volatility regime detection for flat day protection
+# NOTE: Using AND logic - BOTH conditions must be met to block trading
+# This avoids being overly restrictive (user reported ATR alone blocks too many trades)
+MIN_ATR_PCT = 0.0012  # 0.12% - looser threshold since we require both conditions
+MIN_RANGE_RATIO = 0.5  # Today's range must be >= 50% of 20-day ADR
+LOW_VOL_SIZE_CAP = 10  # Max contracts in low vol
+COMPRESSED_SIZE_CAP = 8  # Max contracts when range compressed
+
+
+def get_daily_range_ratio(bars_1m: pd.DataFrame, lookback_days: int = 20) -> float:
+    """
+    Calculate today's range vs average daily range (ADR).
+    Returns ratio: 0.5 = today's range is 50% of average.
+
+    Args:
+        bars_1m: DataFrame with 1-minute OHLCV bars
+        lookback_days: Number of days for ADR calculation
+
+    Returns:
+        Ratio of today's range to ADR (e.g., 0.4 = 40% of average)
+    """
+    if bars_1m is None or bars_1m.empty or len(bars_1m) < 100:
+        return 1.0  # Default to normal if not enough data
+
+    try:
+        # Resample to daily bars
+        daily = bars_1m.resample('D').agg({
+            'open': 'first',
+            'high': 'max',
+            'low': 'min',
+            'close': 'last'
+        }).dropna()
+
+        if len(daily) < 2:
+            return 1.0
+
+        # Calculate daily ranges
+        daily['range'] = daily['high'] - daily['low']
+
+        # Today's range (last complete or current day)
+        today_range = daily['range'].iloc[-1]
+
+        # Average daily range (excluding today)
+        if len(daily) > lookback_days:
+            adr = daily['range'].iloc[-(lookback_days + 1):-1].mean()
+        else:
+            adr = daily['range'].iloc[:-1].mean()
+
+        if adr == 0:
+            return 1.0
+
+        return today_range / adr
+
+    except Exception as e:
+        print(f"[Volatility] Error calculating daily range ratio: {e}")
+        return 1.0
+
+
+def get_volatility_regime(bars_1m: pd.DataFrame) -> dict:
+    """
+    Returns volatility metrics for entry filtering.
+    Used to detect flat/range-bound days where trading should be avoided.
+
+    Args:
+        bars_1m: DataFrame with 1-minute OHLCV bars
+
+    Returns:
+        dict with:
+            - atr_pct: ATR as % of price (e.g., 0.002 = 0.2%)
+            - daily_range_ratio: today's range vs 20-day ADR
+            - is_low_vol: True if trading should be avoided
+            - reason: Why is_low_vol is True (if applicable)
+    """
+    if bars_1m is None or bars_1m.empty:
+        return {
+            'atr_pct': 0.0,
+            'daily_range_ratio': 1.0,
+            'is_low_vol': False,
+            'reason': None
+        }
+
+    try:
+        price = bars_1m['close'].iloc[-1]
+        atr = _atr(bars_1m, 14)
+        atr_pct = atr / price if price > 0 else 0.0
+
+        daily_range_ratio = get_daily_range_ratio(bars_1m, 20)
+
+        # Determine if low volatility
+        # Using AND logic: BOTH low ATR AND compressed range required to block
+        # This avoids being too restrictive while still catching true flat days
+        is_low_vol = False
+        reason = None
+
+        if atr_pct < MIN_ATR_PCT and daily_range_ratio < MIN_RANGE_RATIO:
+            is_low_vol = True
+            reason = f"FLAT DAY: ATR={atr_pct*100:.2f}% + Range={daily_range_ratio:.0%} of ADR"
+
+        return {
+            'atr_pct': round(atr_pct, 5),
+            'daily_range_ratio': round(daily_range_ratio, 3),
+            'is_low_vol': is_low_vol,
+            'reason': reason
+        }
+
+    except Exception as e:
+        print(f"[Volatility] Error calculating regime: {e}")
+        return {
+            'atr_pct': 0.0,
+            'daily_range_ratio': 1.0,
+            'is_low_vol': False,
+            'reason': None
+        }
+
+
 # Backward compatibility aliases
 def train_lstm_daily(bars_1m: pd.DataFrame, **kwargs):
     """Alias for backward compatibility - calls XGBoost training."""

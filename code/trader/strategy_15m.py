@@ -17,7 +17,7 @@ from typing import Optional, Dict, Any, Tuple, List
 
 # Import your existing modules
 from code.data.data_client import data_client
-from indicators import get_trend_signal, get_full_indicator_set
+from indicators import get_trend_signal, get_full_indicator_set, get_volatility_regime
 from discord_notifier import send_entry, send_exit, set_strategy_ready
 
 # Configure logging - use INFO for production, DEBUG for troubleshooting
@@ -267,12 +267,13 @@ class TradingStrategy15m:
         """Check if we should be more selective (daily PnL >= $1000)"""
         return self.daily_pnl >= 1000.0
 
-    def _calculate_position_size(self, confidence: float = 50.0, win_rate: float = 50.0) -> int:
+    def _calculate_position_size(self, confidence: float = 50.0, win_rate: float = 50.0, vol_regime: dict = None) -> int:
         """
         Scale position size 5-20 contracts based on:
         - Confidence score (0-100) - from brain or indicators
         - Historical win rate for this pattern (0-100)
         - Daily P&L (reduce size if losing, cap if winning big)
+        - Volatility regime (reduce size in low vol conditions)
         """
         base = 5  # Minimum contracts
 
@@ -291,6 +292,19 @@ class TradingStrategy15m:
             size_cap = 15  # Conservative when up big (protect gains)
         else:
             size_cap = 20  # Full range available
+
+        # Volatility-based reduction (even if not blocking, reduce size in marginal conditions)
+        if vol_regime:
+            atr_pct = vol_regime.get("atr_pct", 0.003)
+            range_ratio = vol_regime.get("daily_range_ratio", 1.0)
+
+            # Reduce size when volatility is borderline (not blocking, but be cautious)
+            if atr_pct < 0.002:  # ATR < 0.2%
+                size_cap = min(size_cap, 10)
+                logger.debug(f"{self.prefix} Vol reduction: ATR {atr_pct*100:.2f}% → cap {size_cap}")
+            if range_ratio < 0.6:  # Range < 60% of ADR
+                size_cap = min(size_cap, 8)
+                logger.debug(f"{self.prefix} Vol reduction: Range {range_ratio:.0%} → cap {size_cap}")
 
         calculated = min(base + confidence_bonus + wr_bonus, size_cap)
         logger.debug(f"{self.prefix} Position size: {calculated} contracts "
@@ -439,13 +453,21 @@ class TradingStrategy15m:
             logger.debug(f"{self.prefix} [{ticker}] No option chain")
             return
 
-        logger.debug(f"{self.prefix} [{ticker}] Price: ${price:.2f} | Trend: {trend}")
+        # Check volatility regime before entry (use minute_bars for ADR)
+        vol_regime = get_volatility_regime(minute_bars)
+        logger.debug(f"{self.prefix} [{ticker}] Price: ${price:.2f} | Trend: {trend} | "
+                    f"ATR: {vol_regime['atr_pct']*100:.2f}% | Range: {vol_regime['daily_range_ratio']:.0%}")
 
         # Entry logic
         if ticker not in self.positions:
+            # Volatility gate: skip entry on flat days
+            if vol_regime.get("is_low_vol", False):
+                logger.info(f"{self.prefix} [{ticker}] LOW VOL - skipping entry: {vol_regime['reason']}")
+                return
+
             if trend != "chop" and self.can_enter_trades():
                 try:
-                    self._attempt_entry(ticker, trend, chain, price, now.strftime("%Y-%m-%d"), bars_15m)
+                    self._attempt_entry(ticker, trend, chain, price, now.strftime("%Y-%m-%d"), bars_15m, vol_regime)
                 except Exception as e:
                     logger.error(f"{self.prefix} [{ticker}] Entry error: {e}", exc_info=True)
         else:
@@ -561,7 +583,7 @@ class TradingStrategy15m:
             return None
 
     def _attempt_entry(self, ticker: str, trend: str, chain: pd.DataFrame,
-                      price: float, expiration_date: str, bars: pd.DataFrame = None):
+                      price: float, expiration_date: str, bars: pd.DataFrame = None, vol_regime: dict = None):
         """Attempt to enter a new credit spread position"""
 
         conservative = self.is_conservative_mode()
@@ -645,7 +667,7 @@ class TradingStrategy15m:
         # Use trend_strength as confidence proxy (scaled 0-100)
         trend_strength = abs(indicators.get("trend_strength", 0.0))
         confidence = min(100, trend_strength * 100 + 50)  # Center at 50, scale up
-        contracts = self._calculate_position_size(confidence=confidence, win_rate=50.0)
+        contracts = self._calculate_position_size(confidence=confidence, win_rate=50.0, vol_regime=vol_regime)
 
         # Store position with market context for learning
         self.positions[ticker] = {
