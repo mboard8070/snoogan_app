@@ -16,7 +16,7 @@ from typing import Optional, Dict, Any, Tuple
 
 # Import your existing modules
 from code.data.data_client import data_client
-from indicators import get_trend_signal, _macd, _rsi, get_full_indicator_set, get_kst_momentum
+from indicators import get_trend_signal, _macd, _rsi, get_full_indicator_set, get_kst_momentum, get_volatility_regime
 from discord_notifier import send_scalp_entry, send_scalp_exit, set_strategy_ready, send_webhook, is_ready
 
 # Import brain for trade decisions (optional - fails gracefully)
@@ -54,10 +54,11 @@ KNOWLEDGE_DIR = PROJECT_ROOT / "data" / "knowledge"
 KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
 TRADES_FILE = KNOWLEDGE_DIR / "trades.json"
 SHARED_EQUITY_FILE = PROJECT_ROOT.parent / "shared_equity.json"
+SHARED_EQUITY_HISTORY_FILE = PROJECT_ROOT.parent / "shared_equity_history.json"
 
 
 def update_shared_equity(realized_pnl: float) -> None:
-    """Update the shared equity file with realized PnL."""
+    """Update the shared equity file with realized PnL and append to history."""
     try:
         current_equity = 100000.0  # Default starting balance
         if SHARED_EQUITY_FILE.exists():
@@ -71,6 +72,21 @@ def update_shared_equity(realized_pnl: float) -> None:
                 'equity': new_equity,
                 'last_updated': datetime.now(EST).isoformat()
             }, f, indent=2)
+
+        # Append to shared equity history
+        try:
+            history = []
+            if SHARED_EQUITY_HISTORY_FILE.exists():
+                with open(SHARED_EQUITY_HISTORY_FILE, 'r') as f:
+                    history = json.load(f)
+            history.append(new_equity)
+            # Keep last 500 entries
+            history = history[-500:]
+            with open(SHARED_EQUITY_HISTORY_FILE, 'w') as f:
+                json.dump(history, f)
+        except Exception as he:
+            logger.error(f"Failed to update equity history: {he}")
+
         logger.debug(f"Updated shared equity: ${current_equity:.2f} + ${realized_pnl:.2f} = ${new_equity:.2f}")
     except Exception as e:
         logger.error(f"Failed to update shared equity: {e}")
@@ -375,12 +391,13 @@ class ScalpStrategy:
 
         return defaults
 
-    def _calculate_position_size(self, confidence: float = 50.0, win_rate: float = 50.0) -> int:
+    def _calculate_position_size(self, confidence: float = 50.0, win_rate: float = 50.0, vol_regime: dict = None) -> int:
         """
         Scale position size 5-20 contracts based on:
         - Brain confidence (0-100)
         - Historical win rate for this pattern (0-100)
         - Daily P&L (reduce size if losing, cap if winning big)
+        - Volatility regime (reduce size in low vol conditions)
         """
         base = 5  # Minimum contracts
 
@@ -399,6 +416,19 @@ class ScalpStrategy:
             size_cap = 15  # Conservative when up big (protect gains)
         else:
             size_cap = 20  # Full range available
+
+        # Volatility-based reduction (even if not blocking, reduce size in marginal conditions)
+        if vol_regime:
+            atr_pct = vol_regime.get("atr_pct", 0.003)
+            range_ratio = vol_regime.get("daily_range_ratio", 1.0)
+
+            # Reduce size when volatility is borderline (not blocking, but be cautious)
+            if atr_pct < 0.002:  # ATR < 0.2%
+                size_cap = min(size_cap, 10)
+                logger.debug(f"{self.prefix} Vol reduction: ATR {atr_pct*100:.2f}% → cap {size_cap}")
+            if range_ratio < 0.6:  # Range < 60% of ADR
+                size_cap = min(size_cap, 8)
+                logger.debug(f"{self.prefix} Vol reduction: Range {range_ratio:.0%} → cap {size_cap}")
 
         calculated = min(base + confidence_bonus + wr_bonus, size_cap)
         logger.debug(f"{self.prefix} Position size: {calculated} contracts "
@@ -535,18 +565,25 @@ class ScalpStrategy:
             logger.debug(f"{self.prefix} [{ticker}] No option chain")
             return
 
+        # Check volatility regime before entry
+        vol_regime = get_volatility_regime(bars)
         logger.debug(f"{self.prefix} [{ticker}] Price: ${price:.2f} | Trend: {trend} | "
                     f"MACD Bull: {is_momentum_bull} | MACD+: {macd_bullish} | "
                     f"RSI: {rsi_value:.1f} | RSI↑: {rsi_rising} | RSI↓: {rsi_falling} | "
-                    f"KST: {kst_direction}")
+                    f"KST: {kst_direction} | ATR: {vol_regime['atr_pct']*100:.2f}%")
 
         # Entry logic
         if ticker not in self.positions:
+            # Volatility gate: skip entry on flat days
+            if vol_regime.get("is_low_vol", False):
+                logger.info(f"{self.prefix} [{ticker}] LOW VOL - skipping entry: {vol_regime['reason']}")
+                return
+
             if self.can_enter_trades():
                 self._check_entry_conditions(
                     ticker, trend, is_momentum_bull, rsi_value, chain, price, now, bars,
                     rsi_rising=rsi_rising, rsi_falling=rsi_falling, macd_bullish=macd_bullish,
-                    kst_rising=kst_rising, kst_falling=kst_falling
+                    kst_rising=kst_rising, kst_falling=kst_falling, vol_regime=vol_regime
                 )
             else:
                 logger.info(f"{self.prefix} [{ticker}] NO TRADE: Outside entry hours (9:31am-3pm ET)")
@@ -557,7 +594,8 @@ class ScalpStrategy:
                                 rsi_value: float, chain: pd.DataFrame, price: float, now: datetime,
                                 bars: pd.DataFrame = None, rsi_rising: bool = False,
                                 rsi_falling: bool = False, macd_bullish: bool = False,
-                                kst_rising: bool = False, kst_falling: bool = False):
+                                kst_rising: bool = False, kst_falling: bool = False,
+                                vol_regime: dict = None):
         """Check if entry conditions are met - EARLY ENTRY LOGIC with KST filter"""
 
         conservative = self.is_conservative_mode()
@@ -659,7 +697,7 @@ class ScalpStrategy:
 
             if entry_reason:
                 logger.info(f"{self.prefix} [{ticker}] BULL ENTRY: {entry_reason}")
-                self._attempt_entry(ticker, True, chain, price, market_context)
+                self._attempt_entry(ticker, True, chain, price, market_context, vol_regime)
             else:
                 # Log why we didn't enter
                 reasons = []
@@ -704,7 +742,7 @@ class ScalpStrategy:
 
             if entry_reason:
                 logger.info(f"{self.prefix} [{ticker}] BEAR ENTRY: {entry_reason}")
-                self._attempt_entry(ticker, False, chain, price, market_context)
+                self._attempt_entry(ticker, False, chain, price, market_context, vol_regime)
             else:
                 # Log why we didn't enter
                 reasons = []
@@ -732,7 +770,7 @@ class ScalpStrategy:
             return None
 
     def _attempt_entry(self, ticker: str, is_call: bool, chain: pd.DataFrame, price: float,
-                       market_context: Dict = None):
+                       market_context: Dict = None, vol_regime: dict = None):
         """Attempt to enter a new ATM option position"""
 
         # ============ POSITION CORRELATION LIMITS ============
@@ -899,7 +937,8 @@ class ScalpStrategy:
             # Calculate adaptive position size using brain confidence/win_rate
             contracts = self._calculate_position_size(
                 confidence=brain_confidence,
-                win_rate=brain_win_rate
+                win_rate=brain_win_rate,
+                vol_regime=vol_regime
             )
 
             # Get adaptive exit parameters from brain
