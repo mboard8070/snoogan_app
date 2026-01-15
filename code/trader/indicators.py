@@ -592,6 +592,7 @@ MIN_ATR_PCT = 0.0012  # 0.12% - looser threshold since we require both condition
 MIN_RANGE_RATIO = 0.5  # Today's range must be >= 50% of 20-day ADR
 LOW_VOL_SIZE_CAP = 10  # Max contracts in low vol
 COMPRESSED_SIZE_CAP = 8  # Max contracts when range compressed
+MAX_VWAP_CROSSES_PER_HOUR = 4  # More than this per hour = grinding/choppy day
 
 
 def get_daily_range_ratio(bars_1m: pd.DataFrame, lookback_days: int = 20) -> float:
@@ -643,6 +644,82 @@ def get_daily_range_ratio(bars_1m: pd.DataFrame, lookback_days: int = 20) -> flo
         return 1.0
 
 
+def get_vwap_cross_count(bars_1m: pd.DataFrame) -> dict:
+    """
+    Count how many times price has crossed VWAP today.
+    High cross count indicates grinding/choppy market conditions.
+
+    Args:
+        bars_1m: DataFrame with 1-minute OHLCV bars (should include today's data)
+
+    Returns:
+        dict with:
+            - cross_count: Number of VWAP crosses today
+            - crosses_per_hour: Normalized cross rate
+            - hours_traded: Hours of trading data today
+            - is_choppy: True if cross rate exceeds threshold
+    """
+    if bars_1m is None or bars_1m.empty or len(bars_1m) < 10:
+        return {
+            'cross_count': 0,
+            'crosses_per_hour': 0.0,
+            'hours_traded': 0.0,
+            'is_choppy': False
+        }
+
+    try:
+        # Filter to today's bars only
+        today = bars_1m.index[-1].date()
+        today_bars = bars_1m[bars_1m.index.date == today].copy()
+
+        if len(today_bars) < 10:
+            return {
+                'cross_count': 0,
+                'crosses_per_hour': 0.0,
+                'hours_traded': 0.0,
+                'is_choppy': False
+            }
+
+        # Calculate intraday VWAP (cumulative from market open)
+        typical_price = (today_bars['high'] + today_bars['low'] + today_bars['close']) / 3
+        cumulative_tp_vol = (typical_price * today_bars['volume']).cumsum()
+        cumulative_vol = today_bars['volume'].cumsum()
+        vwap_series = cumulative_tp_vol / (cumulative_vol + 1e-10)
+
+        # Count VWAP crosses (when price crosses from above to below or vice versa)
+        price = today_bars['close']
+        above_vwap = price > vwap_series
+        crosses = (above_vwap != above_vwap.shift(1)).sum()
+
+        # Calculate hours traded today
+        if len(today_bars) > 1:
+            time_diff = (today_bars.index[-1] - today_bars.index[0]).total_seconds() / 3600
+            hours_traded = max(time_diff, 0.1)  # Minimum 6 minutes
+        else:
+            hours_traded = 0.1
+
+        crosses_per_hour = crosses / hours_traded if hours_traded > 0 else 0
+
+        # Determine if choppy (too many crosses per hour)
+        is_choppy = crosses_per_hour > MAX_VWAP_CROSSES_PER_HOUR
+
+        return {
+            'cross_count': int(crosses),
+            'crosses_per_hour': round(crosses_per_hour, 1),
+            'hours_traded': round(hours_traded, 2),
+            'is_choppy': is_choppy
+        }
+
+    except Exception as e:
+        print(f"[Volatility] Error calculating VWAP crosses: {e}")
+        return {
+            'cross_count': 0,
+            'crosses_per_hour': 0.0,
+            'hours_traded': 0.0,
+            'is_choppy': False
+        }
+
+
 def get_volatility_regime(bars_1m: pd.DataFrame) -> dict:
     """
     Returns volatility metrics for entry filtering.
@@ -655,6 +732,7 @@ def get_volatility_regime(bars_1m: pd.DataFrame) -> dict:
         dict with:
             - atr_pct: ATR as % of price (e.g., 0.002 = 0.2%)
             - daily_range_ratio: today's range vs 20-day ADR
+            - vwap_crosses: VWAP cross count data
             - is_low_vol: True if trading should be avoided
             - reason: Why is_low_vol is True (if applicable)
     """
@@ -662,6 +740,7 @@ def get_volatility_regime(bars_1m: pd.DataFrame) -> dict:
         return {
             'atr_pct': 0.0,
             'daily_range_ratio': 1.0,
+            'vwap_crosses': {'cross_count': 0, 'crosses_per_hour': 0.0, 'is_choppy': False},
             'is_low_vol': False,
             'reason': None
         }
@@ -672,20 +751,27 @@ def get_volatility_regime(bars_1m: pd.DataFrame) -> dict:
         atr_pct = atr / price if price > 0 else 0.0
 
         daily_range_ratio = get_daily_range_ratio(bars_1m, 20)
+        vwap_data = get_vwap_cross_count(bars_1m)
 
-        # Determine if low volatility
-        # Using AND logic: BOTH low ATR AND compressed range required to block
-        # This avoids being too restrictive while still catching true flat days
+        # Determine if low volatility / grinding day
+        # Two ways to trigger:
+        # 1. Low ATR AND compressed range (original logic)
+        # 2. High VWAP cross rate (grinding/choppy - price keeps reverting)
         is_low_vol = False
         reason = None
 
         if atr_pct < MIN_ATR_PCT and daily_range_ratio < MIN_RANGE_RATIO:
             is_low_vol = True
             reason = f"FLAT DAY: ATR={atr_pct*100:.2f}% + Range={daily_range_ratio:.0%} of ADR"
+        elif vwap_data['is_choppy'] and daily_range_ratio < 0.7:
+            # High VWAP crosses + compressed range = grinding day
+            is_low_vol = True
+            reason = f"GRINDING DAY: {vwap_data['crosses_per_hour']:.1f} VWAP crosses/hr + Range={daily_range_ratio:.0%}"
 
         return {
             'atr_pct': round(atr_pct, 5),
             'daily_range_ratio': round(daily_range_ratio, 3),
+            'vwap_crosses': vwap_data,
             'is_low_vol': is_low_vol,
             'reason': reason
         }
@@ -695,6 +781,7 @@ def get_volatility_regime(bars_1m: pd.DataFrame) -> dict:
         return {
             'atr_pct': 0.0,
             'daily_range_ratio': 1.0,
+            'vwap_crosses': {'cross_count': 0, 'crosses_per_hour': 0.0, 'is_choppy': False},
             'is_low_vol': False,
             'reason': None
         }
