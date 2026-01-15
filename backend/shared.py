@@ -13,6 +13,7 @@ TRADES_FILE = KNOWLEDGE_DIR / "trades.json"
 ARCHIVE_DIR = PROJECT_ROOT / "data" / "knowledge"
 # Shared equity file (single source of truth)
 SHARED_EQUITY_FILE = PROJECT_ROOT / "shared_equity.json"
+SHARED_EQUITY_HISTORY_FILE = PROJECT_ROOT / "shared_equity_history.json"
 BATCH_SIZE = 30
 
 def load_trades():
@@ -86,3 +87,16 @@ def get_shared_equity():
         except (json.JSONDecodeError, KeyError):
             pass
     return get_starting_balance()
+
+def get_shared_equity_history():
+    """Get the shared equity history from the JSON file."""
+    if SHARED_EQUITY_HISTORY_FILE.exists():
+        try:
+            with open(SHARED_EQUITY_HISTORY_FILE, 'r') as f:
+                history = json.load(f)
+                if isinstance(history, list):
+                    return history
+        except (json.JSONDecodeError, KeyError):
+            pass
+    # Return starting balance as initial history if no history exists
+    return [get_starting_balance()]

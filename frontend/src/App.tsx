@@ -54,7 +54,7 @@ function App() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-screen bg-background">
-        <div className="text-2xl text-accent">Loading Snoogans dashboard...</div>
+        <div className="text-2xl text-accent">Loading Iron Spark dashboard...</div>
       </div>
     )
   }

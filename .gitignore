@@ -6186,3 +6186,7 @@ llama.cpp/
 # Build artifacts
 *.map
 venv/
+
+# Shared equity files
+shared_equity.json
+shared_equity_history.json

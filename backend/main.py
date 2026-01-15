@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 ENV_PATH = PROJECT_ROOT / "variables.env"
 load_dotenv(ENV_PATH)
 
-app = FastAPI(title="Snoogans API")
+app = FastAPI(title="Iron Spark API")
 
 # Allow React dev server (and future production) to connect
 app.add_middleware(
@@ -40,4 +40,4 @@ app.include_router(router, prefix="/api")
 
 @app.get("/")
 def health():
-    return {"status": "Snoogans API running – snoochie boochies"}
+    return {"status": "Iron Spark API running"}

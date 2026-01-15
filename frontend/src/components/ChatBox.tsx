@@ -31,7 +31,7 @@ export function ChatBox() {
     <div className="bg-surface rounded-lg p-4 border-2 border-[#4ade80] shadow-lg shadow-green-500/10">
       <h3 className="text-lg font-bold text-[#4ade80] mb-3 flex items-center gap-2">
         <span className="w-2 h-2 bg-[#4ade80] rounded-full animate-pulse"></span>
-        Snoogans Brain
+        Iron Spark Brain
       </h3>
       <div className="h-48 overflow-y-auto mb-3 p-3 bg-background rounded border border-gray-700">
         {messages.map((msg, i) => (
@@ -49,7 +49,7 @@ export function ChatBox() {
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && sendMessage()}
-          placeholder="Ask Snoogans..."
+          placeholder="Ask Iron Spark..."
           className="flex-1 bg-gray-800 rounded px-3 py-2 text-sm border border-gray-600 focus:outline-none focus:border-[#4ade80] focus:ring-1 focus:ring-[#4ade80]"
           disabled={loading}
         />

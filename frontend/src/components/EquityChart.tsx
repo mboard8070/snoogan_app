@@ -20,7 +20,7 @@ export function EquityChart({ data }: EquityChartProps) {
   }
 
   return (
-    <ResponsiveContainer width="100%" height="100%">
+    <ResponsiveContainer width="100%" height="100%" minWidth={200} minHeight={180}>
       <LineChart data={chartData} margin={{ top: 10, right: 20, left: 10, bottom: 5 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="#333" />
         <XAxis dataKey="point" stroke="#888" />

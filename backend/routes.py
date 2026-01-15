@@ -5,7 +5,7 @@ import asyncio
 import json
 from datetime import datetime
 from typing import Dict, List, Any
-from .shared import get_trade_count, get_starting_balance, get_total_learned, get_shared_equity, BATCH_SIZE
+from .shared import get_trade_count, get_starting_balance, get_total_learned, get_shared_equity, get_shared_equity_history, BATCH_SIZE
 from code.trader.strategy import TradingStrategy
 from code.trader.strategy_15m import TradingStrategy15m
 from code.trader.scalp_strategy import ScalpStrategy
@@ -42,7 +42,7 @@ async def get_dashboard_state():
 
     # Get equity from shared equity file (single source of truth, same as Streamlit)
     equity = get_shared_equity()
-    equity_history = strat_1m.equity_history
+    equity_history = get_shared_equity_history()
 
     # Sum daily PnL from all three strategies
     daily_pnl = strat_1m.daily_pnl + strat_15m.daily_pnl + strat_scalp.daily_pnl
@@ -218,11 +218,16 @@ async def websocket_candles(websocket: WebSocket):
     """WebSocket for real-time candlestick data from Alpaca."""
     await websocket.accept()
     subscribed_tickers: List[str] = []
+    last_candle_refresh = 0.0
+    last_price_refresh = 0.0
+    CANDLE_REFRESH_INTERVAL = 60  # Refresh candles every 60 seconds
+    PRICE_REFRESH_INTERVAL = 5   # Refresh real-time prices every 5 seconds
 
     try:
         from datetime import timedelta
         from concurrent.futures import ThreadPoolExecutor
         import functools
+        import time
 
         executor = ThreadPoolExecutor(max_workers=3)
         loop = asyncio.get_event_loop()
@@ -239,42 +244,87 @@ async def websocket_candles(websocket: WebSocket):
                 print(f"Error in fetch_bars_sync for {ticker}: {e}")
                 return None
 
+        def fetch_price_sync(ticker: str):
+            """Fetch real-time price using snapshot (runs in thread pool)."""
+            try:
+                data_client = get_data_client()
+                return data_client.get_underlying_mark(ticker)
+            except Exception as e:
+                print(f"Error fetching price for {ticker}: {e}")
+                return None
+
+        async def send_candles_for_ticker(ticker: str):
+            """Fetch and send candles for a ticker."""
+            try:
+                bars = await loop.run_in_executor(
+                    executor, functools.partial(fetch_bars_sync, ticker, 5)
+                )
+                if bars is not None and len(bars) > 0:
+                    candles = []
+                    for idx, row in bars.tail(100).iterrows():
+                        candles.append({
+                            "time": int(idx.timestamp()),
+                            "open": float(row["open"]),
+                            "high": float(row["high"]),
+                            "low": float(row["low"]),
+                            "close": float(row["close"]),
+                            "volume": int(row.get("volume", 0)),
+                        })
+                    await websocket.send_json({
+                        "type": "history",
+                        "ticker": ticker,
+                        "candles": candles,
+                    })
+                    return True
+            except Exception as e:
+                print(f"Error fetching bars for {ticker}: {e}")
+            return False
+
+        async def send_prices_for_tickers(tickers: List[str]):
+            """Fetch and send real-time prices for all tickers."""
+            prices = {}
+            for ticker in tickers:
+                try:
+                    price = await loop.run_in_executor(
+                        executor, functools.partial(fetch_price_sync, ticker)
+                    )
+                    if price is not None:
+                        prices[ticker] = round(price, 2)
+                except Exception as e:
+                    print(f"Error fetching price for {ticker}: {e}")
+            if prices:
+                await websocket.send_json({
+                    "type": "prices",
+                    "data": prices,
+                })
+
         while True:
+            # Check for new subscribe messages
             try:
                 message = await asyncio.wait_for(websocket.receive_json(), timeout=1.0)
                 if message.get("type") == "subscribe":
                     ticker = message.get("ticker", "").upper()
                     if ticker and ticker not in subscribed_tickers:
                         subscribed_tickers.append(ticker)
-                        try:
-                            bars = await loop.run_in_executor(
-                                executor, functools.partial(fetch_bars_sync, ticker, 5)
-                            )
-                            if bars is not None and len(bars) > 0:
-                                candles = []
-                                for idx, row in bars.tail(100).iterrows():
-                                    candles.append({
-                                        "time": int(idx.timestamp()),
-                                        "open": float(row["open"]),
-                                        "high": float(row["high"]),
-                                        "low": float(row["low"]),
-                                        "close": float(row["close"]),
-                                        "volume": int(row.get("volume", 0)),
-                                    })
-                                await websocket.send_json({
-                                    "type": "history",
-                                    "ticker": ticker,
-                                    "candles": candles,
-                                })
-                                print(f"Sent {len(candles)} candles for {ticker}")
-                            else:
-                                print(f"No bars returned for {ticker}")
-                        except Exception as e:
-                            print(f"Error fetching bars for {ticker}: {e}")
+                        # Send initial data immediately
+                        await send_candles_for_ticker(ticker)
             except asyncio.TimeoutError:
                 pass
 
-            await asyncio.sleep(5)
+            current_time = time.time()
+
+            # Periodically refresh candles (less frequently)
+            if subscribed_tickers and (current_time - last_candle_refresh) >= CANDLE_REFRESH_INTERVAL:
+                for ticker in subscribed_tickers:
+                    await send_candles_for_ticker(ticker)
+                last_candle_refresh = current_time
+
+            # Periodically refresh real-time prices (more frequently)
+            if subscribed_tickers and (current_time - last_price_refresh) >= PRICE_REFRESH_INTERVAL:
+                await send_prices_for_tickers(subscribed_tickers)
+                last_price_refresh = current_time
+
+            await asyncio.sleep(1)
 
     except WebSocketDisconnect:
         pass

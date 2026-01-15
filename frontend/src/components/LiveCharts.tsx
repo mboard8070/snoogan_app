@@ -15,10 +15,17 @@ export default function LiveCharts() {
     IWM: [],
   })
   const wsRef = useRef<WebSocket | null>(null)
+  const mountedRef = useRef(true)
+  const activeTickerRef = useRef<TickerType>('SPY')
   const [prices, setPrices] = useState<Record<string, number>>({})
   const [connected, setConnected] = useState(false)
   const [activeTicker, setActiveTicker] = useState<TickerType>('SPY')
   const [chartInitialized, setChartInitialized] = useState(false)
+
+  // Keep activeTickerRef in sync
+  useEffect(() => {
+    activeTickerRef.current = activeTicker
+  }, [activeTicker])
 
   const initializeChart = useCallback(() => {
     const container = containerRef.current
@@ -106,16 +113,27 @@ export default function LiveCharts() {
   }, [activeTicker])
 
   useEffect(() => {
+    mountedRef.current = true
+    let connectTimeout: ReturnType<typeof setTimeout> | null = null
+
     const getWsUrl = () => {
+      // Connect directly to backend for WebSocket (Vite proxy doesn't handle WS well)
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      return `${protocol}//${window.location.host}/api/ws/candles`
+      const host = window.location.hostname
+      return `${protocol}//${host}:8000/api/ws/candles`
     }
 
     const connect = () => {
+      if (!mountedRef.current) return
+
       const ws = new WebSocket(getWsUrl())
       wsRef.current = ws
 
       ws.onopen = () => {
+        if (!mountedRef.current) {
+          ws.close()
+          return
+        }
         setConnected(true)
         TICKERS.forEach((ticker) => {
           ws.send(JSON.stringify({ type: 'subscribe', ticker }))
@@ -123,8 +141,20 @@ export default function LiveCharts() {
       }
 
       ws.onmessage = (event) => {
+        if (!mountedRef.current) return
         try {
           const msg = JSON.parse(event.data)
+
+          // Handle real-time price updates
+          if (msg.type === 'prices' && msg.data) {
+            setPrices((prev) => ({
+              ...prev,
+              ...msg.data,
+            }))
+            return
+          }
+
+          // Handle historical candle data
           if (msg.type === 'history' && msg.candles) {
             const ticker = msg.ticker as TickerType
             const candles: CandlestickData<Time>[] = msg.candles.map(
@@ -139,16 +169,22 @@ export default function LiveCharts() {
 
             candleData.current[ticker] = candles
 
-            if (ticker === activeTicker && seriesRef.current) {
+            // Use ref to get current active ticker (avoids stale closure)
+            if (ticker === activeTickerRef.current && seriesRef.current) {
               seriesRef.current.setData(candles)
               chartRef.current?.timeScale().fitContent()
             }
 
+            // Only set price from candles if we don't have a real-time price yet
             if (candles.length > 0) {
-              setPrices((prev) => ({
-                ...prev,
-                [ticker]: candles[candles.length - 1].close,
-              }))
+              setPrices((prev) => {
+                // Don't overwrite if we already have a real-time price
+                if (prev[ticker]) return prev
+                return {
+                  ...prev,
+                  [ticker]: candles[candles.length - 1].close,
+                }
+              })
             }
           }
         } catch (err) {
@@ -158,7 +194,10 @@ export default function LiveCharts() {
 
       ws.onclose = () => {
         setConnected(false)
-        setTimeout(connect, 3000)
+        // Only reconnect if still mounted
+        if (mountedRef.current) {
+          setTimeout(connect, 3000)
+        }
       }
 
       ws.onerror = () => {
@@ -166,12 +205,15 @@ export default function LiveCharts() {
       }
     }
 
-    connect()
+    // Delay connection slightly to handle React StrictMode double-mount
+    connectTimeout = setTimeout(connect, 100)
 
     return () => {
+      mountedRef.current = false
+      if (connectTimeout) clearTimeout(connectTimeout)
       wsRef.current?.close()
     }
-  }, [activeTicker])
+  }, []) // Empty dependency array - WebSocket connects once and stays connected
 
   return (
     <div className="space-y-4">

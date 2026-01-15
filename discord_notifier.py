@@ -65,7 +65,7 @@ def send_greeting_if_needed():
     if now.weekday() >= 5:
         return
     if time(8, 0) <= now.time() <= time(9, 0):
-        msg = ("**SNOOGANS ONLINE**\n"
+        msg = ("**IRON SPARK ONLINE**\n"
                "Strategy: Vertical credit spreads on SPY/QQQ/IWM (0DTE/1DTE).\n"
                "Risk management: 40% profit target (then 5% trail), 1x stop loss, 4:00 PM EST cutoff.\n"
                "Defined risk only. Session started.")
@@ -73,7 +73,7 @@ def send_greeting_if_needed():
         _mark_sent(GREETING_FLAG)
 
 def force_send_greeting():
-    msg = ("**SNOOGANS ONLINE**\n"
+    msg = ("**IRON SPARK ONLINE**\n"
            "Strategy: Vertical credit spreads on SPY/QQQ/IWM (0DTE/1DTE).\n"
            "Risk management: 40% profit target (then 5% trail), 1x stop loss, 4:00 PM EST cutoff.\n"
            "Defined risk only. Session started.")

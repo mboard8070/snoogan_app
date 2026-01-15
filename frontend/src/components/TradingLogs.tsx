@@ -84,20 +84,32 @@ export default function TradingLogs({ wsUrl }: TradingLogsProps) {
   const [connected, setConnected] = useState(false)
   const [activeStrategy, setActiveStrategy] = useState<StrategyType>('1m')
   const wsRef = useRef<WebSocket | null>(null)
+  const mountedRef = useRef(true)
   const logsEndRef = useRef<HTMLDivElement>(null)
 
   const getWsUrl = () => {
     if (wsUrl) return wsUrl
+    // Connect directly to backend for WebSocket (Vite proxy doesn't handle WS well)
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    return `${protocol}//${window.location.host}/api/ws/logs`
+    const host = window.location.hostname
+    return `${protocol}//${host}:8000/api/ws/logs`
   }
 
   useEffect(() => {
+    mountedRef.current = true
+    let connectTimeout: ReturnType<typeof setTimeout> | null = null
+
     const connect = () => {
+      if (!mountedRef.current) return
+
       const ws = new WebSocket(getWsUrl())
       wsRef.current = ws
 
       ws.onopen = () => {
+        if (!mountedRef.current) {
+          ws.close()
+          return
+        }
         setConnected(true)
         const timestamp = new Date().toLocaleTimeString()
         setLogs((prev) => ({
@@ -108,6 +120,7 @@ export default function TradingLogs({ wsUrl }: TradingLogsProps) {
       }
 
       ws.onmessage = (event) => {
+        if (!mountedRef.current) return
         try {
           const msg: LogMessage = JSON.parse(event.data)
 
@@ -163,13 +176,16 @@ export default function TradingLogs({ wsUrl }: TradingLogsProps) {
 
       ws.onclose = () => {
         setConnected(false)
-        const timestamp = new Date().toLocaleTimeString()
-        setLogs((prev) => ({
-          '1m': [...prev['1m'], `[${timestamp}] Disconnected - reconnecting...`],
-          '15m': [...prev['15m'], `[${timestamp}] Disconnected - reconnecting...`],
-          'scalp': [...prev['scalp'], `[${timestamp}] Disconnected - reconnecting...`],
-        }))
-        setTimeout(connect, 3000)
+        // Only reconnect if still mounted
+        if (mountedRef.current) {
+          const timestamp = new Date().toLocaleTimeString()
+          setLogs((prev) => ({
+            '1m': [...prev['1m'], `[${timestamp}] Disconnected - reconnecting...`],
+            '15m': [...prev['15m'], `[${timestamp}] Disconnected - reconnecting...`],
+            'scalp': [...prev['scalp'], `[${timestamp}] Disconnected - reconnecting...`],
+          }))
+          setTimeout(connect, 3000)
+        }
       }
 
       ws.onerror = () => {
@@ -177,9 +193,12 @@ export default function TradingLogs({ wsUrl }: TradingLogsProps) {
       }
     }
 
-    connect()
+    // Delay connection slightly to handle React StrictMode double-mount
+    connectTimeout = setTimeout(connect, 100)
 
     return () => {
+      mountedRef.current = false
+      if (connectTimeout) clearTimeout(connectTimeout)
       wsRef.current?.close()
     }
   }, [wsUrl])
