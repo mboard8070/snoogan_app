@@ -351,9 +351,9 @@ class ScalpStrategy:
         """
         # Default exit parameters
         defaults = {
-            'profit_target_pct': 80.0,  # 80% profit target (let winners run, trail stop protects)
-            'stop_loss_pct': 20.0,      # 20% stop loss
-            'trail_activation_pct': 10.0,  # Activate trailing at 10%
+            'profit_target_pct': 100.0,  # No hard cap - let winners run with trailing stop
+            'stop_loss_pct': 20.0,       # 20% stop loss
+            'trail_activation_pct': 10.0,  # Activate 10% trailing at 10% profit
             'confidence': 0,
             'source': 'default'
         }
@@ -1164,8 +1164,8 @@ class ScalpStrategy:
         if mark > pos["best_mark"]:
             pos["best_mark"] = mark
             if pos["trail_active"]:
-                pos["trail_level"] = pos["best_mark"] * 0.95  # 5% trail
-                logger.info(f"{self.prefix} [{ticker}] Trail → ${pos['trail_level']:.2f}")
+                pos["trail_level"] = pos["best_mark"] * 0.90  # 10% trail
+                logger.info(f"{self.prefix} [{ticker}] Trail updated → ${pos['trail_level']:.2f}")
 
         # Update worst mark for drawdown tracking
         if mark < pos.get("worst_mark", mark):
@@ -1185,12 +1185,7 @@ class ScalpStrategy:
             realized = (mark - debit) * pos["contracts"] * 100
             exit_reason = f"Quick scalp +{profit_pct*100:.0f}% in {hold_minutes:.1f}m"
 
-        # 2. PROFIT TARGET (adaptive)
-        elif profit_pct >= profit_target:
-            realized = (mark - debit) * pos["contracts"] * 100
-            exit_reason = f"Profit target +{profit_pct*100:.0f}% (target: {profit_target*100:.0f}%)"
-
-        # 3. TRAILING STOP HIT
+        # 2. TRAILING STOP HIT - let winners run until trail is hit
         elif pos["trail_active"] and mark <= pos["trail_level"]:
             realized = (mark - debit) * pos["contracts"] * 100
             exit_reason = f"Trail stop @ ${pos['trail_level']:.2f}"
@@ -1250,14 +1245,14 @@ class ScalpStrategy:
             realized = -debit * pos["contracts"] * 100
             exit_reason = "Option worthless"
 
-        # 13. ACTIVATE TRAILING (adaptive): profit >= trail_activation starts 5% trail
-        if realized is None and profit_pct >= trail_activation and not pos["trail_active"]:
+        # 13. ACTIVATE TRAILING at 10% profit - 10% trail, let winners run
+        if realized is None and profit_pct >= 0.10 and not pos["trail_active"]:
             pos["trail_active"] = True
-            pos["trail_level"] = pos["best_mark"] * 0.95
-            logger.info(f"{self.prefix} [{ticker}] +{profit_pct*100:.0f}% (≥{trail_activation*100:.0f}%) - 5% trail active @ ${pos['trail_level']:.2f}")
+            pos["trail_level"] = pos["best_mark"] * 0.90
+            logger.info(f"{self.prefix} [{ticker}] +{profit_pct*100:.0f}% profit - 10% trail active @ ${pos['trail_level']:.2f}")
             if is_ready():
                 try:
-                    send_webhook(f"**TRAIL** {ticker} +{profit_pct*100:.0f}% → 5% trail @ ${pos['trail_level']:.2f}")
+                    send_webhook(f"**TRAIL** {ticker} +{profit_pct*100:.0f}% → 10% trail @ ${pos['trail_level']:.2f}")
                 except:
                     pass
 

@@ -1152,25 +1152,20 @@ class TradingStrategy:
             exit_reason = "time_exit"
             logger.info(f"{self.prefix} [{ticker}] Time-based exit (after 2:30 PM)")
 
-        # 5. Profit target: 25% of credit (activates trailing) - take profits faster!
-        elif (credit - current_value) >= 0.25 * credit:
+        # 5. Activate trailing stop at 10% profit - let winners run
+        elif (credit - current_value) >= 0.10 * credit:
             if not pos["trail_active"]:
                 pos["trail_active"] = True
                 pos["trail_level"] = pos["best_value"] * 1.10
-                logger.info(f"{self.prefix} [{ticker}] 25% profit - trailing stop "
+                profit_pct = (credit - current_value) / credit * 100
+                logger.info(f"{self.prefix} [{ticker}] {profit_pct:.0f}% profit - trailing stop "
                           f"activated @ ${pos['trail_level']:.2f}")
 
-        # 6. Check trailing stop (must be OUTSIDE the 50% profit condition)
+        # 6. Check trailing stop - exit when price reverts 10% from best
         if pos["trail_active"] and current_value >= pos["trail_level"]:
             realized = (credit - current_value) * pos["contracts"] * 100
             exit_reason = "trailing_stop"
-            logger.info(f"{self.prefix} [{ticker}] Trailing stop hit")
-
-        # 7. Hard profit target: 40% of credit (lock in wins, don't get greedy)
-        if realized is None and (credit - current_value) >= 0.40 * credit:
-            realized = (credit - current_value) * pos["contracts"] * 100
-            exit_reason = "profit_target_40"
-            logger.info(f"{self.prefix} [{ticker}] 40% profit target hit - taking profits")
+            logger.info(f"{self.prefix} [{ticker}] Trailing stop hit @ ${pos['trail_level']:.2f}")
 
         # Exit if any condition triggered
         if realized is not None:
