@@ -39,19 +39,1605 @@
     "IWM|bull|mid|early|medium": {
       "enter": -0.035,
       "skip": 0.0
+    },
+    "IWM|bull|mid|early|high": {
+      "enter": 0.07544511152537937,
+      "skip": 0.0
+    },
+    "IWM|bull|mid|mid_morning|high": {
+      "enter": -0.0023284925848520216,
+      "skip": 0.0
+    },
+    "SPY|bear|mid|mid_morning|high": {
+      "enter": 0.05747015993714653,
+      "skip": 0.0
+    },
+    "SPY|bull|mid|mid_morning|high": {
+      "enter": 0.031151115108312772,
+      "skip": 0.0
+    },
+    "QQQ|bull|mid|mid_morning|high": {
+      "enter": 0.09526811003471092,
+      "skip": 0.0
+    },
+    "QQQ|bear|mid|mid_morning|high": {
+      "enter": 0.05093269935178364,
+      "skip": 0.0
+    },
+    "IWM|bear|mid|midday|high": {
+      "enter": 0.03203382937528574,
+      "skip": 0.0
+    },
+    "SPY|bear|mid|midday|high": {
+      "enter": 0.012608567848228554,
+      "skip": 0.0
+    },
+    "QQQ|bear|mid|midday|high": {
+      "enter": 0.01693899910515031,
+      "skip": 0.0
+    },
+    "IWM|bull|mid|midday|high": {
+      "enter": 0.004408105099910072,
+      "skip": 0.0
+    },
+    "QQQ|bull|mid|midday|high": {
+      "enter": -0.09347139897555018,
+      "skip": 0.0
+    },
+    "QQQ|bull|mid|afternoon|high": {
+      "enter": 0.01786738721804513,
+      "skip": 0.0
+    },
+    "IWM|bear|mid|afternoon|high": {
+      "enter": 0.12052067669172933,
+      "skip": 0.0
+    },
+    "IWM|bull|mid|afternoon|high": {
+      "enter": 0.06631022751068825,
+      "skip": 0.0
+    },
+    "SPY|bear|mid|early|high": {
+      "enter": 0.021395584202037746,
+      "skip": 0.0
+    },
+    "QQQ|bull|mid|early|high": {
+      "enter": -0.05025508241758239,
+      "skip": 0.0
+    },
+    "QQQ|bear|mid|early|high": {
+      "enter": 0.06829620455187323,
+      "skip": 0.0
+    },
+    "IWM|bear|mid|mid_morning|high": {
+      "enter": 0.08256304440424786,
+      "skip": 0.0
+    },
+    "SPY|bull|mid|midday|high": {
+      "enter": -0.09340507686205085,
+      "skip": 0.0
+    },
+    "SPY|bull|mid|afternoon|high": {
+      "enter": 0.05649738103286875,
+      "skip": 0.0
+    },
+    "SPY|bull|mid|early|high": {
+      "enter": -0.0004302877882173071,
+      "skip": 0.0
+    },
+    "IWM|bear|mid|early|high": {
+      "enter": 0.04779787234042554,
+      "skip": 0.0
+    },
+    "SPY|bear|mid|afternoon|high": {
+      "enter": 0.06969387755102041,
+      "skip": 0.0
+    },
+    "SPY|bull|overbought|mid_morning|high": {
+      "enter": -0.065,
+      "skip": 0.0
+    },
+    "IWM|bull|overbought|mid_morning|high": {
+      "enter": 0.1,
+      "skip": 0.0
+    },
+    "SPY|bear|low|mid_morning|high": {
+      "enter": 0.1,
+      "skip": 0.0
+    },
+    "SPY|bear|oversold|mid_morning|high": {
+      "enter": 0.1,
+      "skip": 0.0
+    },
+    "QQQ|bear|low|mid_morning|high": {
+      "enter": 0.1,
+      "skip": 0.0
+    },
+    "IWM|bear|oversold|mid_morning|high": {
+      "enter": 0.1,
+      "skip": 0.0
+    },
+    "QQQ|bull|overbought|mid_morning|high": {
+      "enter": -0.1696410714285714,
+      "skip": 0.0
+    },
+    "IWM|bear|low|mid_morning|high": {
+      "enter": 0.1,
+      "skip": 0.0
+    },
+    "QQQ|bear|oversold|mid_morning|high": {
+      "enter": 0.201625,
+      "skip": 0.0
+    },
+    "IWM|bull|high|mid_morning|high": {
+      "enter": -0.065,
+      "skip": 0.0
+    },
+    "SPY|bull|high|mid_morning|high": {
+      "enter": -0.065,
+      "skip": 0.0
+    },
+    "QQQ|bull|high|mid_morning|high": {
+      "enter": -0.065,
+      "skip": 0.0
+    },
+    "SPY|bear|oversold|midday|high": {
+      "enter": 0.1,
+      "skip": 0.0
+    },
+    "IWM|bear|low|midday|high": {
+      "enter": 0.1,
+      "skip": 0.0
+    },
+    "SPY|bear|low|midday|high": {
+      "enter": 0.1,
+      "skip": 0.0
+    },
+    "IWM|bear|oversold|midday|high": {
+      "enter": 0.1,
+      "skip": 0.0
+    },
+    "SPY|bull|high|midday|high": {
+      "enter": 0.1,
+      "skip": 0.0
+    },
+    "QQQ|bear|oversold|midday|high": {
+      "enter": 0.085,
+      "skip": 0.0
+    },
+    "QQQ|bear|low|midday|high": {
+      "enter": 0.1,
+      "skip": 0.0
+    },
+    "QQQ|bull|high|midday|high": {
+      "enter": 0.1,
+      "skip": 0.0
+    },
+    "IWM|bull|high|midday|high": {
+      "enter": 0.1,
+      "skip": 0.0
+    },
+    "IWM|bull|overbought|midday|high": {
+      "enter": 0.1,
+      "skip": 0.0
+    },
+    "SPY|bull|overbought|midday|high": {
+      "enter": 0.1,
+      "skip": 0.0
     }
   },
   "stats": {
-    "total_trades": 18,
+    "total_trades": 171,
     "total_skips": 0,
-    "enter_wins": 9,
-    "enter_losses": 9,
-    "total_pnl": -154.9999999999999,
-    "exploration_count": 0,
-    "exploitation_count": 0,
+    "enter_wins": 83,
+    "enter_losses": 88,
+    "total_pnl": -2926.999999999999,
+    "exploration_count": 131,
+    "exploitation_count": 1251,
     "counterfactual_good_skips": 2,
     "counterfactual_bad_skips": 1
   },
-  "epsilon": 0.18274497720251864,
-  "saved_at": "2026-01-08T22:39:11.014370"
+  "epsilon": 0.08487441681256205,
+  "decision_history": [
+    {
+      "should_enter": false,
+      "action": "skip",
+      "reason": "Exploration (epsilon=0.09)",
+      "q_values": {
+        "enter": 0.03203382937528574,
+        "skip": 0.0
+      },
+      "exploration": true,
+      "state_key": "IWM|bear|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:54:20.316757",
+      "brain_win_rate": 43.162849445507234
+    },
+    {
+      "should_enter": false,
+      "action": "skip",
+      "reason": "Q[skip]=0.000 > Q[enter]=-0.021",
+      "q_values": {
+        "enter": -0.020723463015109897,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "QQQ|bull|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:54:21.798701",
+      "brain_win_rate": 45.195822345198195
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "SPY|bull|high|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:54:25.033986",
+      "brain_win_rate": 45.75782688783207
+    },
+    {
+      "should_enter": false,
+      "action": "skip",
+      "reason": "Q[skip]=0.000 > Q[enter]=-0.021",
+      "q_values": {
+        "enter": -0.020723463015109897,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "QQQ|bull|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:54:25.360810",
+      "brain_win_rate": 45.195822345198195
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bull|high|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:54:25.647449",
+      "brain_win_rate": 43.32919272006746
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.032 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.03203382937528574,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bear|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:54:32.190321",
+      "brain_win_rate": 43.162849445507234
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "SPY|bull|high|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:54:37.171454",
+      "brain_win_rate": 45.75782688783207
+    },
+    {
+      "should_enter": false,
+      "action": "skip",
+      "reason": "Q[skip]=0.000 > Q[enter]=-0.021",
+      "q_values": {
+        "enter": -0.020723463015109897,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "QQQ|bull|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:54:37.531144",
+      "brain_win_rate": 45.195822345198195
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bull|high|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:54:37.760814",
+      "brain_win_rate": 43.32919272006746
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.032 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.03203382937528574,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bear|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:54:44.376677",
+      "brain_win_rate": 43.162849445507234
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "SPY|bull|high|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:54:49.090608",
+      "brain_win_rate": 45.75782688783207
+    },
+    {
+      "should_enter": false,
+      "action": "skip",
+      "reason": "Q[skip]=0.000 > Q[enter]=-0.021",
+      "q_values": {
+        "enter": -0.020723463015109897,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "QQQ|bull|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:54:49.365532",
+      "brain_win_rate": 45.195822345198195
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bull|high|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:54:49.581172",
+      "brain_win_rate": 43.32919272006746
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.032 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.03203382937528574,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bear|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:54:56.321192",
+      "brain_win_rate": 43.162849445507234
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "SPY|bull|high|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:55:01.146789",
+      "brain_win_rate": 45.75782688783207
+    },
+    {
+      "should_enter": false,
+      "action": "skip",
+      "reason": "Q[skip]=0.000 > Q[enter]=-0.021",
+      "q_values": {
+        "enter": -0.020723463015109897,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "QQQ|bull|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:55:01.547048",
+      "brain_win_rate": 45.195822345198195
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bull|high|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:55:02.384451",
+      "brain_win_rate": 43.32919272006746
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.032 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.03203382937528574,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bear|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:55:08.343249",
+      "brain_win_rate": 43.162849445507234
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Exploration (epsilon=0.09)",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": true,
+      "state_key": "SPY|bull|high|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:55:13.094292",
+      "brain_win_rate": 45.75782688783207
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bull|high|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:55:13.838277",
+      "brain_win_rate": 43.32919272006746
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.032 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.03203382937528574,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bear|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:55:20.302320",
+      "brain_win_rate": 43.162849445507234
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "SPY|bull|high|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:55:25.095264",
+      "brain_win_rate": 45.75782688783207
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bull|high|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:55:25.705771",
+      "brain_win_rate": 43.32919272006746
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.032 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.03203382937528574,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bear|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:55:32.255944",
+      "brain_win_rate": 43.162849445507234
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Exploration (epsilon=0.09)",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": true,
+      "state_key": "SPY|bull|high|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:55:37.030753",
+      "brain_win_rate": 45.75782688783207
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bull|high|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:55:37.678029",
+      "brain_win_rate": 43.32919272006746
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.032 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.03203382937528574,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bear|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:55:44.310396",
+      "brain_win_rate": 43.162849445507234
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "SPY|bull|high|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:55:48.980700",
+      "brain_win_rate": 45.75782688783207
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bull|high|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:55:49.708461",
+      "brain_win_rate": 43.32919272006746
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.032 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.03203382937528574,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bear|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:55:56.347947",
+      "brain_win_rate": 43.162849445507234
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "SPY|bull|high|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:56:01.017251",
+      "brain_win_rate": 45.75782688783207
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bull|high|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:56:01.543714",
+      "brain_win_rate": 43.32919272006746
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Exploration (epsilon=0.09)",
+      "q_values": {
+        "enter": -0.007539185598443333,
+        "skip": 0.0
+      },
+      "exploration": true,
+      "state_key": "SPY|bull|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:56:07.769422",
+      "brain_win_rate": 46.21120103202264
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.032 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.03203382937528574,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bear|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:56:08.284326",
+      "brain_win_rate": 43.162849445507234
+    },
+    {
+      "should_enter": false,
+      "action": "skip",
+      "reason": "Exploration (epsilon=0.09)",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": true,
+      "state_key": "SPY|bull|high|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:56:13.098194",
+      "brain_win_rate": 45.75782688783207
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bull|high|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:56:13.851123",
+      "brain_win_rate": 43.32919272006746
+    },
+    {
+      "should_enter": false,
+      "action": "skip",
+      "reason": "Q[skip]=0.000 > Q[enter]=-0.008",
+      "q_values": {
+        "enter": -0.007539185598443333,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "SPY|bull|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:56:19.881216",
+      "brain_win_rate": 46.21120103202264
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.032 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.03203382937528574,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bear|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:56:20.563073",
+      "brain_win_rate": 43.162849445507234
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "SPY|bull|high|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:56:25.029244",
+      "brain_win_rate": 45.75782688783207
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bull|high|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:56:25.567812",
+      "brain_win_rate": 43.32919272006746
+    },
+    {
+      "should_enter": false,
+      "action": "skip",
+      "reason": "Q[skip]=0.000 > Q[enter]=-0.008",
+      "q_values": {
+        "enter": -0.007539185598443333,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "SPY|bull|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:56:31.785401",
+      "brain_win_rate": 46.21120103202264
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.032 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.03203382937528574,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bear|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:56:32.406630",
+      "brain_win_rate": 43.162849445507234
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "SPY|bull|high|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:56:37.062799",
+      "brain_win_rate": 45.75782688783207
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bull|high|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:56:37.562890",
+      "brain_win_rate": 43.32919272006746
+    },
+    {
+      "should_enter": false,
+      "action": "skip",
+      "reason": "Q[skip]=0.000 > Q[enter]=-0.008",
+      "q_values": {
+        "enter": -0.007539185598443333,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "SPY|bull|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:56:43.742934",
+      "brain_win_rate": 46.21120103202264
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.032 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.03203382937528574,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bear|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:56:44.494832",
+      "brain_win_rate": 43.162849445507234
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "SPY|bull|high|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:56:49.184169",
+      "brain_win_rate": 45.75782688783207
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bull|high|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:56:49.876845",
+      "brain_win_rate": 43.32919272006746
+    },
+    {
+      "should_enter": false,
+      "action": "skip",
+      "reason": "Q[skip]=0.000 > Q[enter]=-0.008",
+      "q_values": {
+        "enter": -0.007539185598443333,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "SPY|bull|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:56:55.785100",
+      "brain_win_rate": 46.21120103202264
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.032 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.03203382937528574,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bear|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:56:56.363793",
+      "brain_win_rate": 43.162849445507234
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "SPY|bull|high|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:57:01.016906",
+      "brain_win_rate": 45.75782688783207
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bull|overbought|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:57:01.585741",
+      "brain_win_rate": 41.77583014696805
+    },
+    {
+      "should_enter": false,
+      "action": "skip",
+      "reason": "Exploration (epsilon=0.09)",
+      "q_values": {
+        "enter": -0.007539185598443333,
+        "skip": 0.0
+      },
+      "exploration": true,
+      "state_key": "SPY|bull|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:57:07.779883",
+      "brain_win_rate": 46.21120103202264
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.032 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.03203382937528574,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bear|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:57:08.405988",
+      "brain_win_rate": 43.162849445507234
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Exploration (epsilon=0.09)",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": true,
+      "state_key": "SPY|bull|high|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:57:13.022101",
+      "brain_win_rate": 45.75782688783207
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bull|overbought|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:57:13.741824",
+      "brain_win_rate": 41.77583014696805
+    },
+    {
+      "should_enter": false,
+      "action": "skip",
+      "reason": "Q[skip]=0.000 > Q[enter]=-0.008",
+      "q_values": {
+        "enter": -0.007539185598443333,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "SPY|bull|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:57:19.817713",
+      "brain_win_rate": 46.21120103202264
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.032 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.03203382937528574,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bear|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:57:20.396291",
+      "brain_win_rate": 43.162849445507234
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "SPY|bull|high|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:57:25.005186",
+      "brain_win_rate": 45.75782688783207
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bull|overbought|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:57:25.629190",
+      "brain_win_rate": 41.77583014696805
+    },
+    {
+      "should_enter": false,
+      "action": "skip",
+      "reason": "Q[skip]=0.000 > Q[enter]=-0.008",
+      "q_values": {
+        "enter": -0.007539185598443333,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "SPY|bull|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:57:31.730861",
+      "brain_win_rate": 46.21120103202264
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.032 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.03203382937528574,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bear|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:57:32.422613",
+      "brain_win_rate": 43.162849445507234
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "SPY|bull|high|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:57:37.021319",
+      "brain_win_rate": 45.75782688783207
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Exploration (epsilon=0.09)",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": true,
+      "state_key": "IWM|bull|overbought|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:57:37.673638",
+      "brain_win_rate": 41.77583014696805
+    },
+    {
+      "should_enter": false,
+      "action": "skip",
+      "reason": "Q[skip]=0.000 > Q[enter]=-0.008",
+      "q_values": {
+        "enter": -0.007539185598443333,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "SPY|bull|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:57:43.788084",
+      "brain_win_rate": 46.21120103202264
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.032 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.03203382937528574,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bear|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:57:44.422556",
+      "brain_win_rate": 43.162849445507234
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "SPY|bull|high|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:57:49.006917",
+      "brain_win_rate": 45.75782688783207
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Exploration (epsilon=0.09)",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": true,
+      "state_key": "IWM|bull|overbought|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:57:49.551082",
+      "brain_win_rate": 41.77583014696805
+    },
+    {
+      "should_enter": false,
+      "action": "skip",
+      "reason": "Q[skip]=0.000 > Q[enter]=-0.008",
+      "q_values": {
+        "enter": -0.007539185598443333,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "SPY|bull|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:57:55.794604",
+      "brain_win_rate": 46.21120103202264
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.032 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.03203382937528574,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bear|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:57:56.364727",
+      "brain_win_rate": 43.162849445507234
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "SPY|bull|high|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:58:01.052574",
+      "brain_win_rate": 45.75782688783207
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bull|overbought|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:58:01.676193",
+      "brain_win_rate": 41.77583014696805
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.032 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.03203382937528574,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bear|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:58:08.419968",
+      "brain_win_rate": 43.162849445507234
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "SPY|bull|high|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:58:13.115530",
+      "brain_win_rate": 45.75782688783207
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bull|overbought|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:58:13.705955",
+      "brain_win_rate": 41.77583014696805
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.032 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.03203382937528574,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bear|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:58:20.396851",
+      "brain_win_rate": 43.162849445507234
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Exploration (epsilon=0.09)",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": true,
+      "state_key": "SPY|bull|high|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:58:25.344356",
+      "brain_win_rate": 45.75782688783207
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bull|overbought|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:58:26.397872",
+      "brain_win_rate": 41.77583014696805
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.032 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.03203382937528574,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bear|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:58:32.960479",
+      "brain_win_rate": 43.162849445507234
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "SPY|bull|high|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:58:37.341199",
+      "brain_win_rate": 45.75782688783207
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bull|overbought|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:58:38.272762",
+      "brain_win_rate": 41.77583014696805
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.032 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.03203382937528574,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bear|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:58:44.230131",
+      "brain_win_rate": 43.162849445507234
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "SPY|bull|high|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:58:49.079380",
+      "brain_win_rate": 45.75782688783207
+    },
+    {
+      "should_enter": false,
+      "action": "skip",
+      "reason": "Exploration (epsilon=0.09)",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": true,
+      "state_key": "IWM|bull|overbought|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:58:49.807503",
+      "brain_win_rate": 41.77583014696805
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.032 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.03203382937528574,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bear|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:58:56.220416",
+      "brain_win_rate": 43.162849445507234
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "SPY|bull|overbought|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:59:01.047691",
+      "brain_win_rate": 44.204464314732654
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bull|overbought|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:59:01.720961",
+      "brain_win_rate": 41.77583014696805
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.032 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.03203382937528574,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bear|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:59:08.557357",
+      "brain_win_rate": 43.162849445507234
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "SPY|bull|overbought|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:59:13.028731",
+      "brain_win_rate": 44.204464314732654
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.100 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.1,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bull|overbought|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:59:13.735637",
+      "brain_win_rate": 41.77583014696805
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.032 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.03203382937528574,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bear|mid|midday|high",
+      "epsilon": 0.090136322303714,
+      "timestamp": "2026-01-21T12:59:20.363615",
+      "brain_win_rate": 43.162849445507234
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.040 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.03983162096149887,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "SPY|bear|mid|midday|high",
+      "epsilon": 0.08923721248873447,
+      "timestamp": "2026-01-21T13:03:17.245801",
+      "brain_win_rate": 45.132486585912915
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.047 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.04684900380152599,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "SPY|bear|mid|midday|high",
+      "epsilon": 0.08879102642629079,
+      "timestamp": "2026-01-21T13:05:18.477189",
+      "brain_win_rate": 45.41703444535268
+    },
+    {
+      "should_enter": false,
+      "action": "skip",
+      "reason": "Q[skip]=0.000 > Q[enter]=-0.008",
+      "q_values": {
+        "enter": -0.007539185598443333,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "SPY|bull|mid|midday|high",
+      "epsilon": 0.08834707129415934,
+      "timestamp": "2026-01-21T13:15:17.627166",
+      "brain_win_rate": 45.27998625798679
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.139 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.13861113671274963,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "QQQ|bear|mid|midday|high",
+      "epsilon": 0.08790533593768854,
+      "timestamp": "2026-01-21T13:24:20.749488",
+      "brain_win_rate": 44.83336786483
+    },
+    {
+      "should_enter": false,
+      "action": "skip",
+      "reason": "Q[skip]=0.000 > Q[enter]=-0.051",
+      "q_values": {
+        "enter": -0.05106479630829515,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "SPY|bull|mid|midday|high",
+      "epsilon": 0.0874658092580001,
+      "timestamp": "2026-01-21T13:31:17.567931",
+      "brain_win_rate": 45.03652930504146
+    },
+    {
+      "should_enter": false,
+      "action": "skip",
+      "reason": "Q[skip]=0.000 > Q[enter]=-0.013",
+      "q_values": {
+        "enter": -0.012617371158946795,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "SPY|bear|mid|midday|high",
+      "epsilon": 0.0870284802117101,
+      "timestamp": "2026-01-21T13:42:51.842970",
+      "brain_win_rate": 44.96495585174868
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.064 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.06404588130017683,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "QQQ|bear|mid|midday|high",
+      "epsilon": 0.08659333781065155,
+      "timestamp": "2026-01-21T13:47:51.586366",
+      "brain_win_rate": 44.61611533543605
+    },
+    {
+      "should_enter": false,
+      "action": "skip",
+      "reason": "Q[skip]=0.000 > Q[enter]=-0.012",
+      "q_values": {
+        "enter": -0.011891792861585888,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bull|mid|midday|high",
+      "epsilon": 0.08659333781065155,
+      "timestamp": "2026-01-21T13:49:51.888745",
+      "brain_win_rate": 42.46325085109848
+    },
+    {
+      "should_enter": true,
+      "action": "enter",
+      "reason": "Q[enter]=0.117 > Q[skip]=0.000",
+      "q_values": {
+        "enter": 0.11657894736842106,
+        "skip": 0.0
+      },
+      "exploration": false,
+      "state_key": "IWM|bear|mid|afternoon|high",
+      "epsilon": 0.0857295692659903,
+      "timestamp": "2026-01-21T14:03:41.745941",
+      "brain_win_rate": 45.21502987625563
+    }
+  ],
+  "saved_at": "2026-01-21T14:21:00.856818"
 }

@@ -64,6 +64,57 @@ def _macd(series: pd.Series) -> tuple:
     return macd_line.iloc[-1], signal_line.iloc[-1]
 
 
+def get_macd_crossover(df: pd.DataFrame, lookback: int = 3) -> dict:
+    """
+    Detect MACD crossover events within the last N bars.
+
+    Returns:
+        dict with:
+        - crossing_up: True if MACD crossed above signal recently
+        - crossing_down: True if MACD crossed below signal recently
+        - bars_since_cross: Number of bars since last crossover
+        - macd_momentum: Current histogram direction (positive = bullish momentum)
+    """
+    if df is None or len(df) < 26 + lookback:
+        return {'crossing_up': False, 'crossing_down': False, 'bars_since_cross': 999, 'macd_momentum': 0}
+
+    close = df['close']
+    ema12 = close.ewm(span=12, adjust=False).mean()
+    ema26 = close.ewm(span=26, adjust=False).mean()
+    macd_line = ema12 - ema26
+    signal_line = macd_line.ewm(span=9, adjust=False).mean()
+    histogram = macd_line - signal_line
+
+    # Check last N bars for crossover
+    crossing_up = False
+    crossing_down = False
+    bars_since_cross = 999
+
+    for i in range(1, min(lookback + 1, len(histogram))):
+        prev_hist = histogram.iloc[-(i+1)]
+        curr_hist = histogram.iloc[-i]
+
+        # Crossed up: was below signal, now above
+        if prev_hist < 0 and curr_hist >= 0:
+            crossing_up = True
+            bars_since_cross = i
+            break
+        # Crossed down: was above signal, now below
+        elif prev_hist > 0 and curr_hist <= 0:
+            crossing_down = True
+            bars_since_cross = i
+            break
+
+    return {
+        'crossing_up': crossing_up,
+        'crossing_down': crossing_down,
+        'bars_since_cross': bars_since_cross,
+        'macd_momentum': histogram.iloc[-1],
+        'macd_line': macd_line.iloc[-1],
+        'macd_signal': signal_line.iloc[-1]
+    }
+
+
 def _atr(df: pd.DataFrame, period: int = 14) -> float:
     if df is None or len(df) <= period: return 0.0
     high_low = df['high'] - df['low']
@@ -874,6 +925,13 @@ def record_trade(result: dict):
     """
     global _trade_history, _regime_stats
 
+    # Normalize win field to boolean (handle string "True"/"False")
+    win_val = result.get('win', False)
+    if isinstance(win_val, str):
+        result['win'] = win_val.lower() == 'true'
+    else:
+        result['win'] = bool(win_val)
+
     _trade_history.append(result)
 
     # Update regime stats
@@ -881,7 +939,7 @@ def record_trade(result: dict):
     if regime not in _regime_stats:
         _regime_stats[regime] = {'wins': 0, 'losses': 0, 'returns': []}
 
-    if result.get('win', False):
+    if result['win']:
         _regime_stats[regime]['wins'] += 1
     else:
         _regime_stats[regime]['losses'] += 1
@@ -944,8 +1002,16 @@ def get_binomial_win_probability(
             'expected_value': 0.0
         }
 
-    # Count wins
-    wins = sum(1 for t in trades if t.get('win', False))
+    # Count wins - handle both boolean and string "True"/"False" values
+    def is_win(t):
+        w = t.get('win', False)
+        if isinstance(w, bool):
+            return w
+        if isinstance(w, str):
+            return w.lower() == 'true'
+        return bool(w)
+
+    wins = sum(1 for t in trades if is_win(t))
     losses = n - wins
 
     # Point estimate
@@ -961,9 +1027,9 @@ def get_binomial_win_probability(
     ci_lower = max(0, center - spread)
     ci_upper = min(1, center + spread)
 
-    # Calculate average win/loss
-    winning_trades = [t['pnl'] for t in trades if t.get('win') and 'pnl' in t]
-    losing_trades = [t['pnl'] for t in trades if not t.get('win') and 'pnl' in t]
+    # Calculate average win/loss - use same is_win helper
+    winning_trades = [t['pnl'] for t in trades if is_win(t) and 'pnl' in t]
+    losing_trades = [t['pnl'] for t in trades if not is_win(t) and 'pnl' in t]
 
     avg_win = np.mean(winning_trades) if winning_trades else 0.0
     avg_loss = abs(np.mean(losing_trades)) if losing_trades else 0.0

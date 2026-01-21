@@ -1,6 +1,6 @@
 # code/trader/strategy.py – 1-minute vertical credit spread strategy (Alpaca Data)
 # REFACTORED: Fixed dashboard issues with proper logging, error handling, and state management
-# Updated: Fixed $5 width spreads, lowered min credit to $0.15, widened delta to 20-45
+# Updated: $2 width spreads, min credit $0.40, delta 25-40, faster exits (25% PT, 50% SL)
 # Added: End-of-day forced closeout at/after 4:00 PM EST
 
 import os
@@ -18,7 +18,7 @@ from typing import Optional, Dict, Any, Tuple, List
 from code.data.data_client import data_client
 from indicators import (
     get_trend_signal, train_lstm_daily, get_full_indicator_set, get_volatility_regime, record_trade,
-    get_binomial_win_probability, get_conditional_expected_value, get_kelly_criterion
+    get_binomial_win_probability, get_conditional_expected_value, get_kelly_criterion, get_macd_crossover
 )
 from discord_notifier import send_entry, send_exit, set_strategy_ready
 
@@ -246,7 +246,7 @@ class TradingStrategy:
             
         try:
             timestamp = datetime.now(EST).strftime("%Y%m%d_%H%M%S")
-            rag_folder = Path("/data/knowledge")
+            rag_folder = Path(__file__).parent.parent.parent / "data" / "knowledge"
             rag_folder.mkdir(parents=True, exist_ok=True)
             batch_file = rag_folder / f"trades_batch_1m_{timestamp}.json"
             
@@ -493,12 +493,28 @@ class TradingStrategy:
 
         # Entry logic
         if ticker not in self.positions:
-            # Volatility gate: skip entry on flat days
+            # Volatility gate: log but don't skip (was too restrictive)
             if vol_regime.get("is_low_vol", False):
-                logger.info(f"{self.prefix} [{ticker}] LOW VOL - skipping entry: {vol_regime['reason']}")
-                return
+                logger.info(f"{self.prefix} [{ticker}] LOW VOL detected but proceeding: {vol_regime['reason']}")
 
-            if trend != "chop" and self.can_enter_trades():
+            if trend == "chop":
+                logger.info(f"{self.prefix} [{ticker}] CHOP trend - no entry attempted")
+            elif not self.can_enter_trades():
+                logger.info(f"{self.prefix} [{ticker}] Cannot enter trades (max positions or trade limit)")
+            else:
+                # Higher timeframe filter: use 15m trend as directional bias
+                htf_trend = self._get_higher_timeframe_bias(ticker, now)
+                if htf_trend:
+                    # Only enter if 1m trend aligns with 15m trend
+                    if htf_trend == "chop":
+                        logger.info(f"{self.prefix} [{ticker}] HTF CHOP - skipping (15m={htf_trend}, 1m={trend})")
+                        return
+                    elif htf_trend != trend:
+                        logger.info(f"{self.prefix} [{ticker}] HTF CONFLICT - skipping (15m={htf_trend}, 1m={trend})")
+                        return
+                    else:
+                        logger.info(f"{self.prefix} [{ticker}] HTF ALIGNED (15m={htf_trend}, 1m={trend})")
+
                 try:
                     self._attempt_entry(ticker, trend, chain, price, minute_bars, vol_regime)
                 except Exception as e:
@@ -510,19 +526,52 @@ class TradingStrategy:
         """Fetch minute bars with error handling"""
         try:
             minute_bars = data_client.get_spy_bars(
-                now - timedelta(days=7), 
-                now, 
+                now - timedelta(days=7),
+                now,
                 ticker=ticker
             )
-            
+
             if minute_bars is None or minute_bars.empty or len(minute_bars) < 20:
                 logger.debug(f"{self.prefix} [{ticker}] Insufficient minute bars")
                 return None
-                
+
             return minute_bars
-            
+
         except Exception as e:
             logger.error(f"{self.prefix} [{ticker}] Error fetching bars: {e}")
+            return None
+
+    def _fetch_15m_bars(self, ticker: str, now: datetime) -> Optional[pd.DataFrame]:
+        """Fetch 15-minute bars for higher timeframe bias"""
+        try:
+            bars_15m = data_client.get_spy_bars(
+                now - timedelta(days=7),
+                now,
+                ticker=ticker,
+                timeframe="15Min"
+            )
+
+            if bars_15m is None or bars_15m.empty or len(bars_15m) < 20:
+                logger.debug(f"{self.prefix} [{ticker}] Insufficient 15m bars")
+                return None
+
+            return bars_15m
+
+        except Exception as e:
+            logger.debug(f"{self.prefix} [{ticker}] Error fetching 15m bars: {e}")
+            return None
+
+    def _get_higher_timeframe_bias(self, ticker: str, now: datetime) -> Optional[str]:
+        """Get 15m trend as higher timeframe directional bias"""
+        bars_15m = self._fetch_15m_bars(ticker, now)
+        if bars_15m is None:
+            return None
+
+        try:
+            htf_trend = get_trend_signal(bars_15m, None, None)
+            return htf_trend
+        except Exception as e:
+            logger.debug(f"{self.prefix} [{ticker}] Error getting HTF trend: {e}")
             return None
 
     def _fetch_option_chain(self, ticker: str, expiration: str) -> Optional[pd.DataFrame]:
@@ -565,7 +614,7 @@ class TradingStrategy:
             credit = short_bid - long_ask
 
             # Minimum credit filter - only apply during entry
-            if for_entry and credit < 0.15:
+            if for_entry and credit < 0.40:
                 return None
 
             # Return mid-market spread price
@@ -583,7 +632,7 @@ class TradingStrategy:
         # Default exit parameters for credit spreads
         defaults = {
             'profit_target_pct': 50.0,   # Take profit at 50% of max credit
-            'stop_loss_pct': 100.0,      # Stop at 2x credit (100% loss)
+            'stop_loss_pct': 50.0,       # Stop at 1.5x credit (50% loss)
             'trail_activation_pct': 50.0,  # Activate trailing at 50%
             'confidence': 0,
             'source': 'default'
@@ -648,6 +697,33 @@ class TradingStrategy:
             "trend_strength": indicators.get("trend_strength", 0.0),
         }
 
+        # ============ MACD ALIGNMENT FILTER ============
+        # REQUIRE MACD alignment with trade direction
+        # Put spread (bullish): MACD histogram must be positive
+        # Call spread (bearish): MACD histogram must be negative
+        macd_cross = get_macd_crossover(bars, lookback=3)
+
+        if is_put:  # Put credit spread = bullish position, need bullish MACD
+            if macd_cross['crossing_down']:
+                logger.info(f"{self.prefix} [{ticker}] SKIP (MACD): Bullish entry but MACD crossing DOWN "
+                           f"({macd_cross['bars_since_cross']} bars ago)")
+                return
+            if macd_cross['macd_momentum'] <= 0:
+                logger.info(f"{self.prefix} [{ticker}] SKIP (MACD): Bullish entry but MACD histogram negative "
+                           f"(hist={macd_cross['macd_momentum']:.3f}) - need bullish momentum")
+                return
+        else:  # Call credit spread = bearish position, need bearish MACD
+            if macd_cross['crossing_up']:
+                logger.info(f"{self.prefix} [{ticker}] SKIP (MACD): Bearish entry but MACD crossing UP "
+                           f"({macd_cross['bars_since_cross']} bars ago)")
+                return
+            if macd_cross['macd_momentum'] >= 0:
+                logger.info(f"{self.prefix} [{ticker}] SKIP (MACD): Bearish entry but MACD histogram positive "
+                           f"(hist={macd_cross['macd_momentum']:.3f}) - need bearish momentum")
+                return
+
+        logger.info(f"{self.prefix} [{ticker}] MACD ALIGNED: hist={macd_cross['macd_momentum']:.3f}")
+
         # ============ AI DECISION LAYER ============
         # Default confidence/win_rate if brain unavailable
         brain_confidence = 50.0
@@ -667,10 +743,19 @@ class TradingStrategy:
                     if not recommendation['should_enter']:
                         reason = recommendation.get('final_reason', recommendation.get('reason', 'Unknown'))
                         warnings = recommendation.get('indicator_warnings', [])
-                        logger.info(f"{self.prefix} [{ticker}] Brain says SKIP: {reason}")
-                        if warnings:
-                            logger.info(f"{self.prefix} [{ticker}] Warnings: {', '.join(warnings)}")
-                        return
+                        hist = recommendation.get('historical_analysis', {})
+                        hist_win_rate = hist.get('avg_win_rate', 50.0)
+
+                        # RE-ENABLED: Trust brain warnings if win rate is below 50%
+                        # Brain sees patterns we don't - if it says skip AND history is bad, SKIP
+                        if hist_win_rate < 50.0:
+                            logger.info(f"{self.prefix} [{ticker}] SKIP (BRAIN): {reason} "
+                                       f"(historical win rate {hist_win_rate:.0f}% < 50%)")
+                            if warnings:
+                                logger.info(f"{self.prefix} [{ticker}] Warnings: {', '.join(warnings)}")
+                            return
+                        else:
+                            logger.info(f"{self.prefix} [{ticker}] Brain suggests skip but win rate OK ({hist_win_rate:.0f}%): {reason}")
 
                     hist = recommendation.get('historical_analysis', {})
                     brain_confidence = hist.get('confidence', 50.0)
@@ -710,11 +795,12 @@ class TradingStrategy:
 
                 if not rl_decision['should_enter']:
                     q_vals = rl_decision.get('q_values', {})
-                    if q_vals.get('skip', 0) > q_vals.get('enter', 0) + 0.2:
-                        logger.info(f"{self.prefix} [{ticker}] RL Learner says SKIP: {rl_decision['reason']}")
+                    # Only skip if RL has strong conviction (q_skip > q_enter + 0.5)
+                    if q_vals.get('skip', 0) > q_vals.get('enter', 0) + 0.5:
+                        logger.info(f"{self.prefix} [{ticker}] RL Learner says SKIP (strong signal): {rl_decision['reason']}")
                         return
                     else:
-                        logger.info(f"{self.prefix} [{ticker}] Weak RL skip - proceeding anyway")
+                        logger.info(f"{self.prefix} [{ticker}] RL suggests skip but weak signal - proceeding")
                 else:
                     if rl_decision.get('exploration'):
                         logger.info(f"{self.prefix} [{ticker}] RL Learner: EXPLORATION entry")
@@ -736,16 +822,19 @@ class TradingStrategy:
         setup_type = 'put_spread' if is_put else 'call_spread'
         binomial_stats = get_binomial_win_probability(regime=trend, setup_type=setup_type)
 
-        # If we have reliable stats and regime is unfavorable, skip
-        if binomial_stats['reliable'] and binomial_stats['expected_value'] < 0:
+        # If we have reliable stats and regime is significantly unfavorable, skip
+        # Only skip if EV is worse than -$50 (allow marginal losers through)
+        if binomial_stats['reliable'] and binomial_stats['expected_value'] < -50:
             logger.info(f"{self.prefix} [{ticker}] SKIP (STATS): Negative expected value for {trend} regime "
                        f"(EV=${binomial_stats['expected_value']:.2f}, n={binomial_stats['n_trades']})")
             return
+        elif binomial_stats['reliable'] and binomial_stats['expected_value'] < 0:
+            logger.info(f"{self.prefix} [{ticker}] Stats show marginal EV (${binomial_stats['expected_value']:.2f}) - proceeding anyway")
 
-        # Get conditional EV for current regime
+        # Get conditional EV for current regime - only skip if strongly unfavorable
         conditional = get_conditional_expected_value(trend)
-        if conditional['recommendation'] == 'unfavorable' and conditional['sample_size'] >= 10:
-            logger.info(f"{self.prefix} [{ticker}] SKIP (STATS): Regime {trend} historically unfavorable "
+        if conditional['recommendation'] == 'unfavorable' and conditional['sample_size'] >= 20 and conditional['regime_win_rate'] < 0.35:
+            logger.info(f"{self.prefix} [{ticker}] SKIP (STATS): Regime {trend} strongly unfavorable "
                        f"(win_rate={conditional['regime_win_rate']:.1%})")
             return
 
@@ -773,7 +862,7 @@ class TradingStrategy:
         opts = chain[chain[type_col].str.lower() == target_type].copy()
         
         if opts.empty:
-            logger.debug(f"{self.prefix} [{ticker}] No {target_type}s in chain")
+            logger.info(f"{self.prefix} [{ticker}] SKIP: No {target_type}s in chain")
             return
 
         opts = opts.sort_values(strike_col)
@@ -782,16 +871,16 @@ class TradingStrategy:
         short_candidates = self._find_short_candidates(opts, is_put, price, strike_col)
         
         if short_candidates.empty:
-            logger.debug(f"{self.prefix} [{ticker}] No suitable short strikes")
+            logger.info(f"{self.prefix} [{ticker}] SKIP: No suitable short strikes (delta 20-45 or OTM)")
             return
 
-        # Find valid $5-wide spreads
+        # Find valid $2-wide spreads
         candidates = self._find_spread_candidates(
             short_candidates, opts, is_put, strike_col
         )
 
         if not candidates:
-            logger.debug(f"{self.prefix} [{ticker}] No valid $5-wide spreads >= $0.15")
+            logger.info(f"{self.prefix} [{ticker}] SKIP: No valid $2-wide spreads >= $0.40")
             return
 
         # Select best credit spread
@@ -882,11 +971,11 @@ class TradingStrategy:
         if delta_col is not None:
             if is_put:
                 short_candidates = opts[
-                    (opts[delta_col] >= -0.45) & (opts[delta_col] <= -0.20)
+                    (opts[delta_col] >= -0.40) & (opts[delta_col] <= -0.25)
                 ]
             else:
                 short_candidates = opts[
-                    (opts[delta_col] >= 0.20) & (opts[delta_col] <= 0.45)
+                    (opts[delta_col] >= 0.25) & (opts[delta_col] <= 0.40)
                 ]
 
             if not short_candidates.empty:
@@ -907,15 +996,15 @@ class TradingStrategy:
 
         return short_candidates
 
-    def _find_spread_candidates(self, short_candidates: pd.DataFrame, 
-                               opts: pd.DataFrame, is_put: bool, 
+    def _find_spread_candidates(self, short_candidates: pd.DataFrame,
+                               opts: pd.DataFrame, is_put: bool,
                                strike_col: str) -> List[Tuple[float, pd.Series, pd.Series]]:
-        """Find valid $5-wide spread combinations"""
+        """Find valid $2-wide spread combinations (tighter = smaller max loss)"""
         candidates = []
 
         for _, short_row in short_candidates.iterrows():
             short_strike = short_row[strike_col]
-            target_long_strike = short_strike - 5 if is_put else short_strike + 5
+            target_long_strike = short_strike - 2 if is_put else short_strike + 2
 
             long_opts = opts[opts[strike_col] == target_long_strike]
             if long_opts.empty:
@@ -1035,11 +1124,11 @@ class TradingStrategy:
         realized = None
         exit_reason = None
 
-        # 1. Stop loss: 2x credit (100% loss)
-        if current_value >= 2.0 * credit:
+        # 1. Stop loss: 1.5x credit (50% loss) - cut losses faster!
+        if current_value >= 1.5 * credit:
             realized = (credit - current_value) * pos["contracts"] * 100
             exit_reason = "stop_loss"
-            logger.warning(f"{self.prefix} [{ticker}] Stop loss hit (2x credit)")
+            logger.warning(f"{self.prefix} [{ticker}] Stop loss hit (1.5x credit)")
 
         # 2. Chop exit: trend became choppy
         elif trend == "chop":
@@ -1063,12 +1152,12 @@ class TradingStrategy:
             exit_reason = "time_exit"
             logger.info(f"{self.prefix} [{ticker}] Time-based exit (after 2:30 PM)")
 
-        # 5. Profit target: 50% of credit (activates trailing)
-        elif (credit - current_value) >= 0.5 * credit:
+        # 5. Profit target: 25% of credit (activates trailing) - take profits faster!
+        elif (credit - current_value) >= 0.25 * credit:
             if not pos["trail_active"]:
                 pos["trail_active"] = True
                 pos["trail_level"] = pos["best_value"] * 1.10
-                logger.info(f"{self.prefix} [{ticker}] 50% profit - trailing stop "
+                logger.info(f"{self.prefix} [{ticker}] 25% profit - trailing stop "
                           f"activated @ ${pos['trail_level']:.2f}")
 
         # 6. Check trailing stop (must be OUTSIDE the 50% profit condition)
@@ -1077,11 +1166,11 @@ class TradingStrategy:
             exit_reason = "trailing_stop"
             logger.info(f"{self.prefix} [{ticker}] Trailing stop hit")
 
-        # 7. Hard profit target: 80% of credit (take profits, let winners run but cap)
-        if realized is None and (credit - current_value) >= 0.8 * credit:
+        # 7. Hard profit target: 40% of credit (lock in wins, don't get greedy)
+        if realized is None and (credit - current_value) >= 0.40 * credit:
             realized = (credit - current_value) * pos["contracts"] * 100
-            exit_reason = "profit_target_80"
-            logger.info(f"{self.prefix} [{ticker}] 80% profit target hit - taking profits")
+            exit_reason = "profit_target_40"
+            logger.info(f"{self.prefix} [{ticker}] 40% profit target hit - taking profits")
 
         # Exit if any condition triggered
         if realized is not None:

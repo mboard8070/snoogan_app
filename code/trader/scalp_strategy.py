@@ -16,7 +16,7 @@ from typing import Optional, Dict, Any, Tuple
 
 # Import your existing modules
 from code.data.data_client import data_client
-from indicators import get_trend_signal, _macd, _rsi, get_full_indicator_set, get_kst_momentum, get_volatility_regime, record_trade
+from indicators import get_trend_signal, _macd, _rsi, get_full_indicator_set, get_kst_momentum, get_volatility_regime, record_trade, get_macd_crossover
 from discord_notifier import send_scalp_entry, send_scalp_exit, set_strategy_ready, send_webhook, is_ready
 
 # Import brain for trade decisions (optional - fails gracefully)
@@ -454,6 +454,32 @@ class ScalpStrategy:
             logger.error(f"{self.prefix} Error in cached fetch for {key}: {e}")
             return None
 
+    def _fetch_15m_bars(self, ticker: str, now: datetime) -> Optional[pd.DataFrame]:
+        """Fetch 15-minute bars for higher timeframe bias"""
+        return self._cached_fetch(
+            ('bars_15m', ticker),
+            lambda: data_client.get_spy_bars(
+                now - timedelta(days=7),
+                now,
+                ticker=ticker,
+                timeframe="15Min"
+            ),
+            ttl=60  # Cache 15m bars for 60 seconds
+        )
+
+    def _get_higher_timeframe_bias(self, ticker: str, now: datetime) -> Optional[str]:
+        """Get 15m trend as higher timeframe directional bias"""
+        bars_15m = self._fetch_15m_bars(ticker, now)
+        if bars_15m is None or bars_15m.empty or len(bars_15m) < 20:
+            return None
+
+        try:
+            htf_trend = get_trend_signal(bars_15m, None, None)
+            return htf_trend
+        except Exception as e:
+            logger.debug(f"{self.prefix} [{ticker}] Error getting HTF trend: {e}")
+            return None
+
     def run_cycle(self):
         """Main strategy cycle - called periodically"""
         now = datetime.now(EST)
@@ -574,12 +600,24 @@ class ScalpStrategy:
 
         # Entry logic
         if ticker not in self.positions:
-            # Volatility gate: skip entry on flat days
+            # Volatility gate: log but don't skip (was too restrictive)
             if vol_regime.get("is_low_vol", False):
-                logger.info(f"{self.prefix} [{ticker}] LOW VOL - skipping entry: {vol_regime['reason']}")
-                return
+                logger.info(f"{self.prefix} [{ticker}] LOW VOL detected but proceeding: {vol_regime['reason']}")
 
             if self.can_enter_trades():
+                # Higher timeframe filter: use 15m trend as directional bias
+                htf_trend = self._get_higher_timeframe_bias(ticker, now)
+                if htf_trend:
+                    # Only enter if 1m trend aligns with 15m trend
+                    if htf_trend == "chop":
+                        logger.info(f"{self.prefix} [{ticker}] HTF CHOP - skipping (15m={htf_trend}, 1m={trend})")
+                        return
+                    elif htf_trend != trend:
+                        logger.info(f"{self.prefix} [{ticker}] HTF CONFLICT - skipping (15m={htf_trend}, 1m={trend})")
+                        return
+                    else:
+                        logger.info(f"{self.prefix} [{ticker}] HTF ALIGNED (15m={htf_trend}, 1m={trend})")
+
                 self._check_entry_conditions(
                     ticker, trend, is_momentum_bull, rsi_value, chain, price, now, bars,
                     rsi_rising=rsi_rising, rsi_falling=rsi_falling, macd_bullish=macd_bullish,
@@ -789,6 +827,51 @@ class ScalpStrategy:
             logger.info(f"{self.prefix} [{ticker}] NO TRADE: Max 2 positions reached ({list(self.positions.keys())})")
             return
 
+        # Get bars for MACD and brain analysis
+        bars = self._cached_fetch(
+            ('bars', ticker),
+            lambda: data_client.get_spy_bars(
+                datetime.now(EST) - timedelta(days=7),
+                datetime.now(EST),
+                ticker=ticker
+            ),
+            ttl=10
+        )
+
+        # ============ MACD ALIGNMENT FILTER ============
+        # REQUIRE MACD alignment with trade direction (not just absence of conflict)
+        # Calls: MACD histogram must be positive (bullish momentum)
+        # Puts: MACD histogram must be negative (bearish momentum)
+        if bars is not None and len(bars) >= 30:
+            macd_cross = get_macd_crossover(bars, lookback=3)
+
+            if is_call:  # Buying calls = need bullish MACD
+                # Block if MACD just crossed down
+                if macd_cross['crossing_down']:
+                    logger.info(f"{self.prefix} [{ticker}] NO TRADE (MACD): Buying calls but MACD crossing DOWN "
+                               f"({macd_cross['bars_since_cross']} bars ago)")
+                    return
+                # REQUIRE positive histogram (bullish momentum)
+                if macd_cross['macd_momentum'] <= 0:
+                    logger.info(f"{self.prefix} [{ticker}] NO TRADE (MACD): Buying calls but MACD histogram negative "
+                               f"(hist={macd_cross['macd_momentum']:.3f}) - need bullish momentum")
+                    return
+            else:  # Buying puts = need bearish MACD
+                # Block if MACD just crossed up
+                if macd_cross['crossing_up']:
+                    logger.info(f"{self.prefix} [{ticker}] NO TRADE (MACD): Buying puts but MACD crossing UP "
+                               f"({macd_cross['bars_since_cross']} bars ago)")
+                    return
+                # REQUIRE negative histogram (bearish momentum)
+                if macd_cross['macd_momentum'] >= 0:
+                    logger.info(f"{self.prefix} [{ticker}] NO TRADE (MACD): Buying puts but MACD histogram positive "
+                               f"(hist={macd_cross['macd_momentum']:.3f}) - need bearish momentum")
+                    return
+
+            # Log MACD alignment confirmation
+            logger.info(f"{self.prefix} [{ticker}] MACD ALIGNED: hist={macd_cross['macd_momentum']:.3f} "
+                       f"({'bullish' if is_call else 'bearish'} momentum confirmed)")
+
         # Default confidence/win_rate if brain unavailable
         brain_confidence = 50.0
         brain_win_rate = 50.0
@@ -796,16 +879,6 @@ class ScalpStrategy:
         # Query brain for trade recommendation if available
         if self.brain:
             try:
-                # Get live bars for the brain to analyze
-                bars = self._cached_fetch(
-                    ('bars', ticker),
-                    lambda: data_client.get_spy_bars(
-                        datetime.now(EST) - timedelta(days=7),
-                        datetime.now(EST),
-                        ticker=ticker
-                    ),
-                    ttl=10
-                )
 
                 if bars is not None and len(bars) >= 30:
                     # Use live recommendation (combines indicators + history)

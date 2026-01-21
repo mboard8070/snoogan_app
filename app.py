@@ -703,11 +703,9 @@ def render_left_column() -> None:
     )
 
     # Position display with auto-refresh
-    position_placeholder = st.empty()
-
     @st.fragment(run_every=CONFIG.HEADER_REFRESH_SECONDS)
     def update_positions():
-        with position_placeholder.container(border=True):
+        with st.container(border=True):
             render_positions(
                 st.session_state.strategy_1m,
                 "1m",
@@ -725,143 +723,140 @@ def render_indicator_stats() -> None:
         st.warning("Indicator stats module not available")
         return
 
-    # Stats display with auto-refresh
-    stats_placeholder = st.empty()
-
     @st.fragment(run_every=30)
     def update_stats():
-        with stats_placeholder.container():
-            # Load stats from file
-            regime_stats = {}
-            trade_history = []
-            last_updated = None
+        # Load stats from file
+        regime_stats = {}
+        trade_history = []
+        last_updated = None
 
-            if INDICATOR_STATS_FILE.exists():
-                try:
-                    with open(INDICATOR_STATS_FILE, 'r') as f:
-                        state = json.load(f)
-                        trade_history = state.get("trade_history", [])
-                        regime_stats = state.get("regime_stats", {})
-                        last_updated = state.get("last_updated")
-                except Exception as e:
-                    st.error(f"Error loading stats: {e}")
-                    return
-
-            # Get summary
+        if INDICATOR_STATS_FILE.exists():
             try:
-                summary = get_trade_history_summary()
+                with open(INDICATOR_STATS_FILE, 'r') as f:
+                    state = json.load(f)
+                    trade_history = state.get("trade_history", [])
+                    regime_stats = state.get("regime_stats", {})
+                    last_updated = state.get("last_updated")
             except Exception as e:
-                summary = {"total_trades": 0, "win_rate": 0, "avg_win": 0, "avg_loss": 0, "total_pnl": 0}
+                st.error(f"Error loading stats: {e}")
+                return
 
-            # Summary metrics header
-            st.subheader("📊 Binomial Statistics")
-            col1, col2, col3, col4, col5 = st.columns(5)
-            col1.metric("Total Trades", summary.get("total_trades", 0))
-            col2.metric("Win Rate", f"{summary.get('win_rate', 0):.1f}%")
-            col3.metric("Avg Win", f"${summary.get('avg_win', 0):.2f}")
-            col4.metric("Avg Loss", f"${summary.get('avg_loss', 0):.2f}")
-            col5.metric("Total P&L", f"${summary.get('total_pnl', 0):+.2f}")
+        # Get summary
+        try:
+            summary = get_trade_history_summary()
+        except Exception as e:
+            summary = {"total_trades": 0, "win_rate": 0, "avg_win": 0, "avg_loss": 0, "total_pnl": 0}
 
-            st.divider()
+        # Summary metrics header
+        st.subheader("Binomial Statistics")
+        col1, col2, col3, col4, col5 = st.columns(5)
+        col1.metric("Total Trades", summary.get("total_trades", 0))
+        col2.metric("Win Rate", f"{summary.get('win_rate', 0):.1f}%")
+        col3.metric("Avg Win", f"${summary.get('avg_win', 0):.2f}")
+        col4.metric("Avg Loss", f"${summary.get('avg_loss', 0):.2f}")
+        col5.metric("Total P&L", f"${summary.get('total_pnl', 0):+.2f}")
 
-            # Regime breakdown
-            st.subheader("Win Rate by Regime")
-            regime_cols = st.columns(3)
+        st.divider()
 
-            for i, regime in enumerate(["bull", "bear", "chop"]):
-                with regime_cols[i]:
-                    st.markdown(f"**{regime.upper()}**")
+        # Regime breakdown
+        st.subheader("Win Rate by Regime")
+        regime_cols = st.columns(3)
 
-                    # Raw stats
-                    rs = regime_stats.get(regime, {})
-                    wins = rs.get("wins", 0)
-                    losses = rs.get("losses", 0)
-                    total = wins + losses
+        for i, regime in enumerate(["bull", "bear", "chop"]):
+            with regime_cols[i]:
+                st.markdown(f"**{regime.upper()}**")
 
-                    if total > 0:
-                        raw_win_rate = wins / total * 100
-                        st.write(f"Record: {wins}W / {losses}L")
-                        st.write(f"Win Rate: {raw_win_rate:.1f}%")
+                # Raw stats
+                rs = regime_stats.get(regime, {})
+                wins = rs.get("wins", 0)
+                losses = rs.get("losses", 0)
+                total = wins + losses
 
-                        # Binomial confidence interval
-                        try:
-                            binomial = get_binomial_win_probability(regime=regime)
-                            ci = binomial.get("confidence_interval", [0, 1])
-                            ev = binomial.get("expected_value", 0)
-                            reliable = binomial.get("reliable", False)
+                if total > 0:
+                    raw_win_rate = wins / total * 100
+                    st.write(f"Record: {wins}W / {losses}L")
+                    st.write(f"Win Rate: {raw_win_rate:.1f}%")
 
-                            st.write(f"95% CI: [{ci[0]*100:.0f}% - {ci[1]*100:.0f}%]")
-                            st.write(f"Expected Value: ${ev:.2f}")
+                    # Binomial confidence interval
+                    try:
+                        binomial = get_binomial_win_probability(regime=regime)
+                        ci_lower = binomial.get("ci_lower", 0)
+                        ci_upper = binomial.get("ci_upper", 1)
+                        ev = binomial.get("expected_value", 0)
+                        reliable = binomial.get("reliable", False)
 
-                            if reliable:
-                                st.success("Statistically Reliable")
-                            else:
-                                st.warning(f"Need {20 - total} more trades")
-                        except Exception:
-                            pass
+                        st.write(f"95% CI: [{ci_lower*100:.0f}% - {ci_upper*100:.0f}%]")
+                        st.write(f"Expected Value: ${ev:.2f}")
 
-                        # Conditional EV
-                        try:
-                            cond_ev = get_conditional_expected_value(regime)
-                            rec = cond_ev.get("recommendation", "neutral")
-                            if rec == "favorable":
-                                st.success(f"Favorable")
-                            elif rec == "unfavorable":
-                                st.error(f"Unfavorable")
-                            else:
-                                st.info(f"Neutral")
-                        except Exception:
-                            pass
-                    else:
-                        st.caption("No data yet")
+                        if reliable:
+                            st.success("Statistically Reliable")
+                        else:
+                            st.warning(f"Need {20 - total} more trades")
+                    except Exception:
+                        pass
 
-            st.divider()
+                    # Conditional EV
+                    try:
+                        cond_ev = get_conditional_expected_value(regime)
+                        rec = cond_ev.get("recommendation", "neutral")
+                        if rec == "favorable":
+                            st.success(f"Favorable")
+                        elif rec == "unfavorable":
+                            st.error(f"Unfavorable")
+                        else:
+                            st.info(f"Neutral")
+                    except Exception:
+                        pass
+                else:
+                    st.caption("No data yet")
 
-            # Kelly Criterion
-            if summary.get("total_trades", 0) >= 5:
-                try:
-                    win_rate = summary.get("win_rate", 50) / 100
-                    avg_win = summary.get("avg_win", 100)
-                    avg_loss = abs(summary.get("avg_loss", -100))
-                    if avg_loss > 0:
-                        kelly = get_kelly_criterion(win_rate, avg_win, avg_loss)
+        st.divider()
 
-                        st.subheader("Kelly Criterion")
-                        kelly_cols = st.columns(4)
-                        kelly_cols[0].metric("Full Kelly", f"{kelly.get('kelly_fraction', 0)*100:.1f}%")
-                        kelly_cols[1].metric("Half Kelly", f"{kelly.get('half_kelly', 0)*100:.1f}%")
-                        kelly_cols[2].metric("Max Bet", f"{kelly.get('max_bet_percent', 0):.1f}%")
-                        kelly_cols[3].metric("Edge", kelly.get("recommendation", "unknown").replace("_", " ").upper())
+        # Kelly Criterion
+        if summary.get("total_trades", 0) >= 5:
+            try:
+                win_rate = summary.get("win_rate", 50) / 100
+                avg_win = summary.get("avg_win", 100)
+                avg_loss = abs(summary.get("avg_loss", -100))
+                if avg_loss > 0:
+                    kelly = get_kelly_criterion(win_rate, avg_win, avg_loss)
 
-                        st.divider()
-                except Exception:
-                    pass
+                    st.subheader("Kelly Criterion")
+                    kelly_cols = st.columns(4)
+                    kelly_cols[0].metric("Full Kelly", f"{kelly.get('kelly_fraction', 0)*100:.1f}%")
+                    kelly_cols[1].metric("Half Kelly", f"{kelly.get('half_kelly', 0)*100:.1f}%")
+                    kelly_cols[2].metric("Max Bet", f"{kelly.get('max_bet_percent', 0):.1f}%")
+                    kelly_cols[3].metric("Edge", kelly.get("recommendation", "unknown").replace("_", " ").upper())
 
-            # Recent trades
-            if trade_history:
-                st.subheader("Recent Trades")
-                recent_trades = trade_history[-10:][::-1]  # Last 10, reversed
-                trades_data = []
-                for t in recent_trades:
-                    trades_data.append({
-                        "Time": str(t.get("entry_time", ""))[:16],
-                        "Ticker": t.get("ticker", ""),
-                        "Setup": t.get("setup_type", ""),
-                        "Regime": t.get("regime", "").upper(),
-                        "P&L": t.get("pnl", 0),
-                        "Result": "WIN" if t.get("win") else "LOSS"
-                    })
-                st.dataframe(
-                    pd.DataFrame(trades_data),
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "P&L": st.column_config.NumberColumn(format="$%.2f"),
-                    }
-                )
+                    st.divider()
+            except Exception:
+                pass
 
-            if last_updated:
-                st.caption(f"Last updated: {last_updated}")
+        # Recent trades
+        if trade_history:
+            st.subheader("Recent Trades")
+            recent_trades = trade_history[-10:][::-1]  # Last 10, reversed
+            trades_data = []
+            for t in recent_trades:
+                trades_data.append({
+                    "Time": str(t.get("entry_time", ""))[:16],
+                    "Ticker": t.get("ticker", ""),
+                    "Setup": t.get("setup_type", ""),
+                    "Regime": t.get("regime", "").upper(),
+                    "P&L": t.get("pnl", 0),
+                    "Result": "WIN" if t.get("win") else "LOSS"
+                })
+            st.dataframe(
+                pd.DataFrame(trades_data),
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "P&L": st.column_config.NumberColumn(format="$%.2f"),
+                }
+            )
+
+        if last_updated:
+            st.caption(f"Last updated: {last_updated}")
 
     update_stats()
 
@@ -889,99 +884,81 @@ def render_learner_monitor() -> None:
         st.warning("Adaptive Learner not available")
         return
 
-    # Debug: show state file info
-    state_file = Path("/home/mboard76/nvidia-workbench/snoogan_app/code/rag/adaptive_learner_state.json")
-    if state_file.exists():
-        import os
-        mtime = datetime.fromtimestamp(os.path.getmtime(state_file))
-        st.caption(f"DEBUG: State file exists, last modified: {mtime.strftime('%Y-%m-%d %H:%M:%S')}")
-    else:
-        st.caption("DEBUG: State file does NOT exist")
-
-    # Learner display with auto-refresh
-    learner_placeholder = st.empty()
-
     @st.fragment(run_every=CONFIG.LEARNER_REFRESH_SECONDS)
     def update_learner():
-        with learner_placeholder.container():
-            learner = get_learner()
-            stats = learner.get_stats()
-            decisions = learner.get_decision_summary()
+        learner = get_learner()
+        stats = learner.get_stats()
+        decisions = learner.get_decision_summary()
 
-            # Compact header metrics in a single row
-            col1, col2, col3, col4, col5, col6 = st.columns(6)
-            col1.metric("States", stats['total_states'])
-            col2.metric("Trades", stats['total_trades'])
-            col3.metric("Win %", f"{stats['win_rate']:.0f}%")
-            col4.metric("P&L", f"${stats['total_pnl']:+.0f}")
-            col5.metric("Epsilon", f"{stats['epsilon']:.0%}")
-            good_skips = stats.get('counterfactual_good_skips', 0)
-            bad_skips = stats.get('counterfactual_bad_skips', 0)
-            col6.metric("Skips", f"{good_skips}/{good_skips+bad_skips}")
+        # Compact header metrics in a single row
+        col1, col2, col3, col4, col5, col6 = st.columns(6)
+        col1.metric("States", stats['total_states'])
+        col2.metric("Trades", stats['total_trades'])
+        col3.metric("Win %", f"{stats['win_rate']:.0f}%")
+        col4.metric("P&L", f"${stats['total_pnl']:+.0f}")
+        col5.metric("Epsilon", f"{stats['epsilon']:.0%}")
+        good_skips = stats.get('counterfactual_good_skips', 0)
+        bad_skips = stats.get('counterfactual_bad_skips', 0)
+        col6.metric("Skips", f"{good_skips}/{good_skips+bad_skips}")
 
-            # Two columns with expanders
-            left, right = st.columns(2)
+        # Two columns with expanders
+        left, right = st.columns(2)
 
-            with left:
-                with st.expander("Best States to Trade", expanded=True):
-                    best_states = learner.get_best_states(5)
-                    if best_states:
-                        best_data = []
-                        for s in best_states:
-                            parts = s['state'].split('|')
-                            best_data.append({
-                                "Tkr": parts[0],
-                                "Trend": parts[1],
-                                "RSI": parts[2],
-                                "Q": f"{s['q_enter']:+.3f}"
-                            })
-                        st.dataframe(pd.DataFrame(best_data), use_container_width=True, hide_index=True, height=150)
-                    else:
-                        st.caption("No states learned yet")
-
-            with right:
-                with st.expander("States to Avoid", expanded=True):
-                    worst_states = learner.get_worst_states(5)
-                    if worst_states:
-                        worst_data = []
-                        for s in worst_states:
-                            parts = s['state'].split('|')
-                            worst_data.append({
-                                "Tkr": parts[0],
-                                "Trend": parts[1],
-                                "RSI": parts[2],
-                                "Q": f"{s['q_enter']:+.3f}"
-                            })
-                        st.dataframe(pd.DataFrame(worst_data), use_container_width=True, hide_index=True, height=150)
-
-            # Recent decisions in expander
-            with st.expander("Recent Decisions", expanded=False):
-                # Debug logging
-                st.caption(f"DEBUG: decision_history length = {len(learner.decision_history)}")
-                st.caption(f"DEBUG: decisions summary = {decisions}")
-                recent = learner.get_recent_decisions(10)
-                st.caption(f"DEBUG: recent_decisions count = {len(recent)}")
-
-                if decisions['total'] > 0:
-                    col1, col2, col3 = st.columns(3)
-                    col1.metric("Enters", decisions['enters'], f"{decisions['enter_rate']:.0f}%")
-                    col2.metric("Skips", decisions['skips'], f"{100-decisions['enter_rate']:.0f}%")
-                    col3.metric("Explores", decisions['explorations'], f"{decisions['exploration_rate']:.0f}%")
-
-                    if recent:
-                        decision_data = []
-                        for d in recent:
-                            decision_data.append({
-                                "Time": d.get('timestamp', '')[-8:],
-                                "State": d.get('state_key', '')[:25],
-                                "Action": d.get('action', '').upper(),
-                                "Exp": "Y" if d.get('exploration') else ""
-                            })
-                        st.dataframe(pd.DataFrame(decision_data), use_container_width=True, hide_index=True, height=200)
-                    else:
-                        st.caption("No recent decisions returned")
+        with left:
+            with st.expander("Best States to Trade", expanded=True):
+                best_states = learner.get_best_states(5)
+                if best_states:
+                    best_data = []
+                    for s in best_states:
+                        parts = s['state'].split('|')
+                        best_data.append({
+                            "Tkr": parts[0],
+                            "Trend": parts[1],
+                            "RSI": parts[2],
+                            "Q": f"{s['q_enter']:+.3f}"
+                        })
+                    st.dataframe(pd.DataFrame(best_data), use_container_width=True, hide_index=True, height=150)
                 else:
-                    st.caption("No decisions yet (decisions['total'] == 0)")
+                    st.caption("No states learned yet")
+
+        with right:
+            with st.expander("States to Avoid", expanded=True):
+                worst_states = learner.get_worst_states(5)
+                if worst_states:
+                    worst_data = []
+                    for s in worst_states:
+                        parts = s['state'].split('|')
+                        worst_data.append({
+                            "Tkr": parts[0],
+                            "Trend": parts[1],
+                            "RSI": parts[2],
+                            "Q": f"{s['q_enter']:+.3f}"
+                        })
+                    st.dataframe(pd.DataFrame(worst_data), use_container_width=True, hide_index=True, height=150)
+
+        # Recent decisions in expander
+        with st.expander("Recent Decisions", expanded=False):
+            if decisions['total'] > 0:
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Enters", decisions['enters'], f"{decisions['enter_rate']:.0f}%")
+                col2.metric("Skips", decisions['skips'], f"{100-decisions['enter_rate']:.0f}%")
+                col3.metric("Explores", decisions['explorations'], f"{decisions['exploration_rate']:.0f}%")
+
+                recent = learner.get_recent_decisions(10)
+                if recent:
+                    decision_data = []
+                    for d in recent:
+                        decision_data.append({
+                            "Time": d.get('timestamp', '')[-8:],
+                            "State": d.get('state_key', '')[:25],
+                            "Action": d.get('action', '').upper(),
+                            "Exp": "Y" if d.get('exploration') else ""
+                        })
+                    st.dataframe(pd.DataFrame(decision_data), use_container_width=True, hide_index=True, height=200)
+                else:
+                    st.caption("No recent decisions")
+            else:
+                st.caption("No decisions yet")
 
     update_learner()
 

@@ -66,7 +66,7 @@ if DATA_PROVIDER == "alpaca":
     from alpaca.data.historical.stock import StockHistoricalDataClient
     from alpaca.data.historical.option import OptionHistoricalDataClient
     from alpaca.data.requests import StockBarsRequest, OptionChainRequest, StockSnapshotRequest
-    from alpaca.data.timeframe import TimeFrame
+    from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
     from alpaca.data.enums import DataFeed  # Required for SIP feed
 
     class DataClient:
@@ -79,10 +79,21 @@ if DATA_PROVIDER == "alpaca":
             self.contract_size = CONTRACT_SIZE
             self.mode = MODE
 
-        def get_spy_bars(self, start: datetime, end: datetime, ticker: str = "SPY") -> pd.DataFrame:
+        def get_spy_bars(self, start: datetime, end: datetime, ticker: str = "SPY", timeframe: str = "1Min") -> pd.DataFrame:
+            # Map string timeframe to Alpaca TimeFrame
+            tf_map = {
+                "1Min": TimeFrame.Minute,
+                "5Min": TimeFrame(5, TimeFrameUnit.Minute),
+                "15Min": TimeFrame(15, TimeFrameUnit.Minute),
+                "30Min": TimeFrame(30, TimeFrameUnit.Minute),
+                "1Hour": TimeFrame.Hour,
+                "1Day": TimeFrame.Day,
+            }
+            tf = tf_map.get(timeframe, TimeFrame.Minute)
+
             request = StockBarsRequest(
                 symbol_or_symbols=ticker,
-                timeframe=TimeFrame.Minute,
+                timeframe=tf,
                 start=start,
                 end=end,
                 adjustment="all"
@@ -204,7 +215,7 @@ if DATA_PROVIDER == "alpaca":
 elif DATA_PROVIDER == "polygon":
     class DataClient:
         def __init__(self): raise NotImplementedError("Polygon stub")
-        def get_spy_bars(self, start, end, ticker="SPY"): raise NotImplementedError
+        def get_spy_bars(self, start, end, ticker="SPY", timeframe="1Min"): raise NotImplementedError
         def get_spy_option_chain(self, expiration_date, ticker="SPY"): raise NotImplementedError
         def get_underlying_mark(self, symbol="SPY"): raise NotImplementedError
 

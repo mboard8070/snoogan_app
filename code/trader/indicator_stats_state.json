@@ -9,17 +9,441 @@
       "holding_period": 30,
       "exit_reason": "profit_target",
       "ticker": "SPY"
+    },
+    {
+      "pnl": -470.00000000000017,
+      "win": false,
+      "regime": "bear",
+      "setup_type": "long_put",
+      "entry_time": "2026-01-21T09:32:30.311968-05:00",
+      "holding_period": 6.003780766666667,
+      "exit_reason": "Time decay stop -21% after 6m",
+      "ticker": "SPY"
+    },
+    {
+      "pnl": 320.00000000000006,
+      "win": true,
+      "regime": "bear",
+      "setup_type": "long_put",
+      "entry_time": "2026-01-21T09:39:29.840590-05:00",
+      "holding_period": 1.0118020833333334,
+      "exit_reason": "Quick scalp +18% in 1.0m",
+      "ticker": "SPY"
+    },
+    {
+      "pnl": 0.0,
+      "win": false,
+      "regime": "bull",
+      "setup_type": "long_call",
+      "entry_time": "2026-01-21T09:52:08.308812-05:00",
+      "holding_period": 1.3707848333333332,
+      "exit_reason": "MACD bearish cross (call)",
+      "ticker": "IWM"
+    },
+    {
+      "pnl": -459.99999999999994,
+      "win": false,
+      "regime": "bear",
+      "setup_type": "long_put",
+      "entry_time": "2026-01-21T10:11:27.247527-05:00",
+      "holding_period": 4.9110155,
+      "exit_reason": "Stop loss -31% (limit: -25%)",
+      "ticker": "SPY"
+    },
+    {
+      "pnl": -109.99999999999999,
+      "win": false,
+      "regime": "bear",
+      "setup_type": "long_put",
+      "entry_time": "2026-01-21T10:21:40.886502-05:00",
+      "holding_period": 3.010350916666667,
+      "exit_reason": "Momentum fade RSI=60 (put)",
+      "ticker": "SPY"
+    },
+    {
+      "pnl": 15.000000000000014,
+      "win": true,
+      "regime": "bull",
+      "setup_type": "long_call",
+      "entry_time": "2026-01-21T10:37:08.952696-05:00",
+      "holding_period": 7.006657649999999,
+      "exit_reason": "Trail stop @ $1.01",
+      "ticker": "IWM"
+    },
+    {
+      "pnl": 125.0,
+      "win": true,
+      "regime": "bear",
+      "setup_type": "long_put",
+      "entry_time": "2026-01-21T11:00:25.553209-05:00",
+      "holding_period": 5.005908683333333,
+      "exit_reason": "Profit target +20% (target: 10%)",
+      "ticker": "SPY"
+    },
+    {
+      "pnl": -5.000000000000004,
+      "win": false,
+      "regime": "bear",
+      "setup_type": "long_put",
+      "entry_time": "2026-01-21T11:06:25.532250-05:00",
+      "holding_period": 4.51786245,
+      "exit_reason": "Trail stop @ $1.31",
+      "ticker": "QQQ"
+    },
+    {
+      "pnl": 89.99999999999999,
+      "win": true,
+      "regime": "bull",
+      "setup_type": "put_spread",
+      "entry_time": "2026-01-21T10:44:30.135574-05:00",
+      "holding_period": 29.40933485,
+      "exit_reason": "trailing_stop",
+      "ticker": "QQQ"
+    },
+    {
+      "pnl": 60.00000000000006,
+      "win": true,
+      "regime": "bear",
+      "setup_type": "long_put",
+      "entry_time": "2026-01-21T11:15:55.052135-05:00",
+      "holding_period": 4.456478483333333,
+      "exit_reason": "Profit target +13% (target: 10%)",
+      "ticker": "SPY"
+    },
+    {
+      "pnl": -70.00000000000006,
+      "win": false,
+      "regime": "bear",
+      "setup_type": "long_put",
+      "entry_time": "2026-01-21T11:21:21.302450-05:00",
+      "holding_period": 8.009012516666667,
+      "exit_reason": "Max hold 8m",
+      "ticker": "QQQ"
+    },
+    {
+      "pnl": -270.0,
+      "win": false,
+      "regime": "bull",
+      "setup_type": "put_spread",
+      "entry_time": "2026-01-21T11:20:20.420671-05:00",
+      "holding_period": 17.025141,
+      "exit_reason": "stop_loss",
+      "ticker": "QQQ"
+    },
+    {
+      "pnl": -220.00000000000003,
+      "win": false,
+      "regime": "bull",
+      "setup_type": "put_spread",
+      "entry_time": "2026-01-21T11:37:20.510254-05:00",
+      "holding_period": 9.7331729,
+      "exit_reason": "stop_loss",
+      "ticker": "SPY"
+    },
+    {
+      "pnl": -350.00000000000006,
+      "win": false,
+      "regime": "bull",
+      "setup_type": "put_spread",
+      "entry_time": "2026-01-21T11:38:20.256776-05:00",
+      "holding_period": 8.747595516666667,
+      "exit_reason": "stop_loss",
+      "ticker": "QQQ"
+    },
+    {
+      "pnl": 80.0,
+      "win": true,
+      "regime": "bear",
+      "setup_type": "call_spread",
+      "entry_time": "2026-01-21T11:46:19.090760-05:00",
+      "holding_period": 10.784077066666667,
+      "exit_reason": "trailing_stop",
+      "ticker": "QQQ"
+    },
+    {
+      "pnl": -190.0,
+      "win": false,
+      "regime": "bull",
+      "setup_type": "put_spread",
+      "entry_time": "2026-01-21T11:45:21.416659-05:00",
+      "holding_period": 19.174416633333333,
+      "exit_reason": "stop_loss",
+      "ticker": "IWM"
+    },
+    {
+      "pnl": -85.00000000000001,
+      "win": false,
+      "regime": "bull",
+      "setup_type": "put_spread",
+      "entry_time": "2026-01-21T11:47:08.428034-05:00",
+      "holding_period": 18.996249116666668,
+      "exit_reason": "stop_loss",
+      "ticker": "SPY"
+    },
+    {
+      "pnl": 70.0,
+      "win": true,
+      "regime": "bear",
+      "setup_type": "call_spread",
+      "entry_time": "2026-01-21T11:57:41.781763-05:00",
+      "holding_period": 11.6121392,
+      "exit_reason": "trailing_stop",
+      "ticker": "QQQ"
+    },
+    {
+      "pnl": -194.99999999999997,
+      "win": false,
+      "regime": "bull",
+      "setup_type": "put_spread",
+      "entry_time": "2026-01-21T11:47:08.756415-05:00",
+      "holding_period": 25.57324075,
+      "exit_reason": "stop_loss",
+      "ticker": "QQQ"
+    },
+    {
+      "pnl": 45.00000000000001,
+      "win": true,
+      "regime": "bull",
+      "setup_type": "put_spread",
+      "entry_time": "2026-01-21T12:13:06.749630-05:00",
+      "holding_period": 7.212915066666667,
+      "exit_reason": "trailing_stop",
+      "ticker": "SPY"
+    },
+    {
+      "pnl": 0.0,
+      "win": false,
+      "regime": "bear",
+      "setup_type": "call_spread",
+      "entry_time": "2026-01-21T12:09:29.973355-05:00",
+      "holding_period": 14.536413933333334,
+      "exit_reason": "trend_reversal \u2192 bull",
+      "ticker": "QQQ"
+    },
+    {
+      "pnl": -60.00000000000003,
+      "win": false,
+      "regime": "bull",
+      "setup_type": "put_spread",
+      "entry_time": "2026-01-21T12:24:13.732381-05:00",
+      "holding_period": 2.8053474499999997,
+      "exit_reason": "trend_to_chop",
+      "ticker": "QQQ"
+    },
+    {
+      "pnl": -160.00000000000003,
+      "win": false,
+      "regime": "bull",
+      "setup_type": "long_call",
+      "entry_time": "2026-01-21T12:24:21.501827-05:00",
+      "holding_period": 6.013235300000001,
+      "exit_reason": "Time decay stop -24% after 6m",
+      "ticker": "SPY"
+    },
+    {
+      "pnl": -60.0,
+      "win": false,
+      "regime": "bull",
+      "setup_type": "put_spread",
+      "entry_time": "2026-01-21T12:24:13.044590-05:00",
+      "holding_period": 7.82736845,
+      "exit_reason": "trend_to_chop",
+      "ticker": "SPY"
+    },
+    {
+      "pnl": -49.999999999999986,
+      "win": false,
+      "regime": "bull",
+      "setup_type": "put_spread",
+      "entry_time": "2026-01-21T12:43:20.109646-05:00",
+      "holding_period": 1.02675505,
+      "exit_reason": "trend_reversal \u2192 bear",
+      "ticker": "QQQ"
+    },
+    {
+      "pnl": -104.99999999999999,
+      "win": false,
+      "regime": "bear",
+      "setup_type": "long_put",
+      "entry_time": "2026-01-21T12:46:20.126991-05:00",
+      "holding_period": 4.033680433333333,
+      "exit_reason": "MACD bullish cross (put)",
+      "ticker": "SPY"
+    },
+    {
+      "pnl": 114.99999999999999,
+      "win": true,
+      "regime": "bull",
+      "setup_type": "long_call",
+      "entry_time": "2026-01-21T12:54:21.807876-05:00",
+      "holding_period": 5.004649716666666,
+      "exit_reason": "Profit target +15% (target: 12%)",
+      "ticker": "QQQ"
+    },
+    {
+      "pnl": -110.00000000000001,
+      "win": false,
+      "regime": "bull",
+      "setup_type": "put_spread",
+      "entry_time": "2026-01-21T12:55:01.571016-05:00",
+      "holding_period": 7.009875316666666,
+      "exit_reason": "stop_loss",
+      "ticker": "QQQ"
+    },
+    {
+      "pnl": 54.999999999999936,
+      "win": true,
+      "regime": "bear",
+      "setup_type": "long_put",
+      "entry_time": "2026-01-21T13:03:17.255914-05:00",
+      "holding_period": 1.0267985833333333,
+      "exit_reason": "Quick scalp +9% in 1.0m",
+      "ticker": "SPY"
+    },
+    {
+      "pnl": -214.99999999999994,
+      "win": false,
+      "regime": "bear",
+      "setup_type": "long_put",
+      "entry_time": "2026-01-21T13:05:18.490371-05:00",
+      "holding_period": 4.994505366666667,
+      "exit_reason": "Stop loss -35% (limit: -25%)",
+      "ticker": "SPY"
+    },
+    {
+      "pnl": -195.00000000000003,
+      "win": false,
+      "regime": "bull",
+      "setup_type": "long_call",
+      "entry_time": "2026-01-21T13:15:17.636306-05:00",
+      "holding_period": 5.0127443,
+      "exit_reason": "Stop loss -30% (limit: -25%)",
+      "ticker": "SPY"
+    },
+    {
+      "pnl": -190.0,
+      "win": false,
+      "regime": "bear",
+      "setup_type": "long_put",
+      "entry_time": "2026-01-21T13:24:20.754666-05:00",
+      "holding_period": 3.9541781333333335,
+      "exit_reason": "Stop loss -36% (limit: -25%)",
+      "ticker": "QQQ"
+    },
+    {
+      "pnl": -139.99999999999994,
+      "win": false,
+      "regime": "bull",
+      "setup_type": "long_call",
+      "entry_time": "2026-01-21T13:31:17.573399-05:00",
+      "holding_period": 6.009395166666667,
+      "exit_reason": "Stop loss -33% (limit: -25%)",
+      "ticker": "SPY"
+    },
+    {
+      "pnl": 70.0,
+      "win": true,
+      "regime": "bear",
+      "setup_type": "long_put",
+      "entry_time": "2026-01-21T13:42:51.852343-05:00",
+      "holding_period": 2.999139833333333,
+      "exit_reason": "Profit target +16% (target: 9%)",
+      "ticker": "SPY"
+    },
+    {
+      "pnl": -89.99999999999997,
+      "win": false,
+      "regime": "bear",
+      "setup_type": "long_put",
+      "entry_time": "2026-01-21T13:47:51.591534-05:00",
+      "holding_period": 2.0109233833333335,
+      "exit_reason": "Trend reversal \u2192 bull",
+      "ticker": "QQQ"
+    },
+    {
+      "pnl": 15.000000000000014,
+      "win": true,
+      "regime": "bull",
+      "setup_type": "long_call",
+      "entry_time": "2026-01-21T13:49:51.904507-05:00",
+      "holding_period": 1.9986352666666667,
+      "exit_reason": "Quick scalp +10% in 2.0m",
+      "ticker": "IWM"
+    },
+    {
+      "pnl": 60.0,
+      "win": true,
+      "regime": "bear",
+      "setup_type": "long_put",
+      "entry_time": "2026-01-21T14:03:41.750877-05:00",
+      "holding_period": 1.9992379666666666,
+      "exit_reason": "Quick scalp +14% in 2.0m",
+      "ticker": "IWM"
+    },
+    {
+      "pnl": 30.00000000000003,
+      "win": true,
+      "regime": "bull",
+      "setup_type": "long_call",
+      "entry_time": "2026-01-21T14:19:30.590893-05:00",
+      "holding_period": 1.5044102833333333,
+      "exit_reason": "Quick scalp +8% in 1.5m",
+      "ticker": "IWM"
     }
   ],
   "regime_stats": {
     "bull": {
-      "wins": 1,
-      "losses": 0,
+      "wins": 7,
+      "losses": 14,
       "returns": [
-        100.0
+        100.0,
+        0.0,
+        15.000000000000014,
+        89.99999999999999,
+        -270.0,
+        -220.00000000000003,
+        -350.00000000000006,
+        -190.0,
+        -85.00000000000001,
+        -194.99999999999997,
+        45.00000000000001,
+        -60.00000000000003,
+        -160.00000000000003,
+        -60.0,
+        -49.999999999999986,
+        114.99999999999999,
+        -110.00000000000001,
+        -195.00000000000003,
+        -139.99999999999994,
+        15.000000000000014,
+        30.00000000000003
+      ]
+    },
+    "bear": {
+      "wins": 8,
+      "losses": 10,
+      "returns": [
+        -470.00000000000017,
+        320.00000000000006,
+        -459.99999999999994,
+        -109.99999999999999,
+        125.0,
+        -5.000000000000004,
+        60.00000000000006,
+        -70.00000000000006,
+        80.0,
+        70.0,
+        0.0,
+        -104.99999999999999,
+        54.999999999999936,
+        -214.99999999999994,
+        -190.0,
+        70.0,
+        -89.99999999999997,
+        60.0
       ]
     }
   },
-  "last_updated": "2026-01-21T08:59:39.042848",
+  "last_updated": "2026-01-21T14:21:00.856075",
   "version": 1
 }
