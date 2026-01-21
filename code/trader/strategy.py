@@ -817,28 +817,40 @@ class TradingStrategy:
                        f"PT={exit_params['profit_target_pct']:.0f}%, "
                        f"SL={exit_params['stop_loss_pct']:.0f}%")
 
-        # ============ STATISTICAL FILTERING ============
-        # Query binomial stats and conditional EV for regime filtering
+        # ============ ADAPTIVE REGIME ADJUSTMENT ============
+        # Instead of skipping unfavorable regimes, ADAPT: trade smaller, tighter stops
         setup_type = 'put_spread' if is_put else 'call_spread'
         binomial_stats = get_binomial_win_probability(regime=trend, setup_type=setup_type)
-
-        # If we have reliable stats and regime is significantly unfavorable, skip
-        # Only skip if EV is worse than -$50 (allow marginal losers through)
-        if binomial_stats['reliable'] and binomial_stats['expected_value'] < -50:
-            logger.info(f"{self.prefix} [{ticker}] SKIP (STATS): Negative expected value for {trend} regime "
-                       f"(EV=${binomial_stats['expected_value']:.2f}, n={binomial_stats['n_trades']})")
-            return
-        elif binomial_stats['reliable'] and binomial_stats['expected_value'] < 0:
-            logger.info(f"{self.prefix} [{ticker}] Stats show marginal EV (${binomial_stats['expected_value']:.2f}) - proceeding anyway")
-
-        # Get conditional EV for current regime - only skip if strongly unfavorable
         conditional = get_conditional_expected_value(trend)
-        if conditional['recommendation'] == 'unfavorable' and conditional['sample_size'] >= 20 and conditional['regime_win_rate'] < 0.35:
-            logger.info(f"{self.prefix} [{ticker}] SKIP (STATS): Regime {trend} strongly unfavorable "
-                       f"(win_rate={conditional['regime_win_rate']:.1%})")
-            return
 
-        # Log stats if available
+        # Default: normal trading
+        regime_size_mult = 1.0  # Position size multiplier
+        regime_stop_mult = 1.0  # Stop loss multiplier (lower = tighter)
+
+        # Adapt based on regime performance
+        if binomial_stats['reliable'] and binomial_stats['n_trades'] >= 10:
+            win_rate = binomial_stats['win_rate']
+            ev = binomial_stats['expected_value']
+
+            if ev < -50 or win_rate < 0.35:
+                # Very unfavorable: trade at 50% size, 75% stop (tighter)
+                regime_size_mult = 0.5
+                regime_stop_mult = 0.75
+                logger.info(f"{self.prefix} [{ticker}] ADAPT (UNFAVORABLE): {trend} regime "
+                           f"(win={win_rate:.0%}, EV=${ev:.0f}) → 50% size, tighter stops")
+            elif ev < 0 or win_rate < 0.45:
+                # Marginal: trade at 75% size
+                regime_size_mult = 0.75
+                regime_stop_mult = 0.85
+                logger.info(f"{self.prefix} [{ticker}] ADAPT (MARGINAL): {trend} regime "
+                           f"(win={win_rate:.0%}, EV=${ev:.0f}) → 75% size")
+            elif ev > 50 and win_rate > 0.55:
+                # Favorable: can trade larger
+                regime_size_mult = 1.25
+                logger.info(f"{self.prefix} [{ticker}] ADAPT (FAVORABLE): {trend} regime "
+                           f"(win={win_rate:.0%}, EV=${ev:.0f}) → 125% size")
+
+        # Log stats
         if binomial_stats['n_trades'] > 0:
             logger.debug(f"{self.prefix} [{ticker}] Stats: win_rate={binomial_stats['win_rate']:.1%}, "
                         f"EV=${binomial_stats['expected_value']:.2f}, n={binomial_stats['n_trades']}")
@@ -921,6 +933,14 @@ class TradingStrategy:
                 contracts = max(5, contracts // 2)
                 logger.info(f"{self.prefix} [{ticker}] Kelly reduction: no edge -> {contracts} contracts")
 
+        # Apply regime-based size adjustment (adapt, don't skip)
+        if regime_size_mult != 1.0:
+            contracts = max(1, int(contracts * regime_size_mult))
+            logger.info(f"{self.prefix} [{ticker}] Regime adjustment: {regime_size_mult:.0%} -> {contracts} contracts")
+
+        # Adjust stop loss for unfavorable regimes (tighter stops)
+        adjusted_stop_pct = exit_params.get('stop_loss_pct', 100.0) * regime_stop_mult
+
         # Store position with market context for learning
         self.positions[ticker] = {
             "is_put": is_put,
@@ -937,7 +957,8 @@ class TradingStrategy:
             # AI decision tracking
             "learner_state_key": learner_state_key,
             "profit_target_pct": exit_params.get('profit_target_pct', 50.0),
-            "stop_loss_pct": exit_params.get('stop_loss_pct', 100.0),
+            "stop_loss_pct": adjusted_stop_pct,
+            "regime_adjustment": regime_size_mult,  # Track for learning
         }
 
         self.trades_today.append("entry")

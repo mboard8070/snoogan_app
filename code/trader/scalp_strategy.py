@@ -16,7 +16,11 @@ from typing import Optional, Dict, Any, Tuple
 
 # Import your existing modules
 from code.data.data_client import data_client
-from indicators import get_trend_signal, _macd, _rsi, get_full_indicator_set, get_kst_momentum, get_volatility_regime, record_trade, get_macd_crossover
+from indicators import (
+    get_trend_signal, _macd, _rsi, get_full_indicator_set, get_kst_momentum,
+    get_volatility_regime, record_trade, get_macd_crossover,
+    get_binomial_win_probability, get_conditional_expected_value
+)
 from discord_notifier import send_scalp_entry, send_scalp_exit, set_strategy_ready, send_webhook, is_ready
 
 # Import brain for trade decisions (optional - fails gracefully)
@@ -1013,6 +1017,40 @@ class ScalpStrategy:
                 win_rate=brain_win_rate,
                 vol_regime=vol_regime
             )
+
+            # ============ ADAPTIVE REGIME ADJUSTMENT ============
+            # Get current trend for regime-based position sizing
+            trend = market_context.get('trend', 'unknown') if market_context else 'unknown'
+            if trend == 'unknown' and bars is not None and len(bars) >= 20:
+                trend = get_trend_signal(bars, None, None)
+
+            # Query binomial stats for this regime
+            setup_type = 'long_call' if is_call else 'long_put'
+            regime_size_mult = 1.0
+            try:
+                binomial_stats = get_binomial_win_probability(regime=trend, setup_type=setup_type)
+                if binomial_stats['reliable'] and binomial_stats['n_trades'] >= 10:
+                    win_rate = binomial_stats['win_rate']
+                    ev = binomial_stats['expected_value']
+
+                    if ev < -50 or win_rate < 0.35:
+                        regime_size_mult = 0.5
+                        logger.info(f"{self.prefix} [{ticker}] ADAPT (UNFAVORABLE): {trend} regime "
+                                   f"(win={win_rate:.0%}, EV=${ev:.0f}) → 50% size")
+                    elif ev < 0 or win_rate < 0.45:
+                        regime_size_mult = 0.75
+                        logger.info(f"{self.prefix} [{ticker}] ADAPT (MARGINAL): {trend} regime "
+                                   f"(win={win_rate:.0%}, EV=${ev:.0f}) → 75% size")
+                    elif ev > 50 and win_rate > 0.55:
+                        regime_size_mult = 1.25
+                        logger.info(f"{self.prefix} [{ticker}] ADAPT (FAVORABLE): {trend} regime "
+                                   f"(win={win_rate:.0%}, EV=${ev:.0f}) → 125% size")
+            except Exception as e:
+                logger.debug(f"{self.prefix} [{ticker}] Could not get regime stats: {e}")
+
+            # Apply regime adjustment
+            if regime_size_mult != 1.0:
+                contracts = max(1, int(contracts * regime_size_mult))
 
             # Get adaptive exit parameters from brain
             exit_params = self._get_adaptive_exits(ticker, is_call, market_context or {})
