@@ -1,0 +1,25 @@
+{
+  "trade_history": [
+    {
+      "pnl": 100.0,
+      "win": true,
+      "regime": "bull",
+      "setup_type": "put_spread",
+      "entry_time": "2026-01-21T10:00:00",
+      "holding_period": 30,
+      "exit_reason": "profit_target",
+      "ticker": "SPY"
+    }
+  ],
+  "regime_stats": {
+    "bull": {
+      "wins": 1,
+      "losses": 0,
+      "returns": [
+        100.0
+      ]
+    }
+  },
+  "last_updated": "2026-01-21T08:59:39.042848",
+  "version": 1
+}

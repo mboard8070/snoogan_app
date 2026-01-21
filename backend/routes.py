@@ -6,12 +6,28 @@ import json
 from datetime import datetime
 from typing import Dict, List, Any
 from .shared import get_trade_count, get_starting_balance, get_total_learned, get_shared_equity, get_shared_equity_history, BATCH_SIZE
+from pathlib import Path
 from code.trader.strategy import TradingStrategy
 from code.trader.strategy_15m import TradingStrategy15m
 from code.trader.scalp_strategy import ScalpStrategy
 from code.rag.snoogans_brain import SnoogansBrain
 from code.rag.adaptive_learner import AdaptiveLearner
 from code.data.data_client import get_data_client
+
+# Import indicator stats functions
+try:
+    from code.trader.indicators import (
+        get_trade_history_summary,
+        get_binomial_win_probability,
+        get_conditional_expected_value,
+        get_kelly_criterion,
+    )
+    INDICATOR_STATS_AVAILABLE = True
+except ImportError:
+    INDICATOR_STATS_AVAILABLE = False
+
+# Path to indicator stats state file
+INDICATOR_STATS_FILE = Path(__file__).parent.parent / "code" / "trader" / "indicator_stats_state.json"
 
 router = APIRouter()
 
@@ -105,6 +121,71 @@ async def get_learner_data():
         "worst_states": worst_states,
         "recent_decisions": recent_decisions,
     }
+
+@router.get("/indicator-stats")
+async def get_indicator_stats():
+    """Get indicator statistics including binomial win rates and Kelly criterion."""
+    result = {
+        "available": INDICATOR_STATS_AVAILABLE,
+        "trade_history": [],
+        "regime_stats": {},
+        "binomial_stats": {},
+        "kelly_stats": {},
+        "conditional_ev": {},
+        "last_updated": None,
+    }
+
+    if not INDICATOR_STATS_AVAILABLE:
+        return result
+
+    # Load raw stats from file
+    if INDICATOR_STATS_FILE.exists():
+        try:
+            with open(INDICATOR_STATS_FILE, 'r') as f:
+                state = json.load(f)
+                result["trade_history"] = state.get("trade_history", [])[-20:]  # Last 20 trades
+                result["regime_stats"] = state.get("regime_stats", {})
+                result["last_updated"] = state.get("last_updated")
+        except Exception as e:
+            print(f"Error loading indicator stats: {e}")
+
+    # Get summary from the indicator module
+    try:
+        summary = get_trade_history_summary()
+        result["summary"] = summary
+    except Exception as e:
+        result["summary"] = {"error": str(e)}
+
+    # Calculate binomial stats for each regime
+    for regime in ["bull", "bear", "chop"]:
+        try:
+            binomial = get_binomial_win_probability(regime=regime)
+            result["binomial_stats"][regime] = binomial
+        except Exception as e:
+            result["binomial_stats"][regime] = {"error": str(e)}
+
+    # Calculate conditional expected value for each regime
+    for regime in ["bull", "bear", "chop"]:
+        try:
+            cond_ev = get_conditional_expected_value(regime)
+            result["conditional_ev"][regime] = cond_ev
+        except Exception as e:
+            result["conditional_ev"][regime] = {"error": str(e)}
+
+    # Get Kelly criterion (using summary stats if available)
+    try:
+        summary = get_trade_history_summary()
+        if summary.get("total_trades", 0) >= 5:
+            win_rate = summary.get("win_rate", 50) / 100
+            avg_win = summary.get("avg_win", 100)
+            avg_loss = abs(summary.get("avg_loss", -100))
+            if avg_loss > 0:
+                kelly = get_kelly_criterion(win_rate, avg_win, avg_loss)
+                result["kelly_stats"] = kelly
+    except Exception as e:
+        result["kelly_stats"] = {"error": str(e)}
+
+    return result
 
 # WebSocket for real-time logs
 @router.websocket("/ws/logs")

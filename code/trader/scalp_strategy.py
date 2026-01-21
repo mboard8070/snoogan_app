@@ -16,7 +16,7 @@ from typing import Optional, Dict, Any, Tuple
 
 # Import your existing modules
 from code.data.data_client import data_client
-from indicators import get_trend_signal, _macd, _rsi, get_full_indicator_set, get_kst_momentum, get_volatility_regime
+from indicators import get_trend_signal, _macd, _rsi, get_full_indicator_set, get_kst_momentum, get_volatility_regime, record_trade
 from discord_notifier import send_scalp_entry, send_scalp_exit, set_strategy_ready, send_webhook, is_ready
 
 # Import brain for trade decisions (optional - fails gracefully)
@@ -1267,6 +1267,21 @@ class ScalpStrategy:
 
             self.closed_trades.append(closed_trade)
             self._save_individual_trade(closed_trade)
+
+            # Record trade for statistical tracking (binomial, conditional EV, etc.)
+            try:
+                record_trade({
+                    'pnl': realized_pnl,
+                    'win': realized_pnl > 0,
+                    'regime': market_ctx.get('trend', 'unknown'),
+                    'setup_type': 'long_call' if pos['is_call'] else 'long_put',
+                    'entry_time': entry_time_str,
+                    'holding_period': hold_duration_minutes,
+                    'exit_reason': exit_reason,
+                    'ticker': ticker,
+                })
+            except Exception as e:
+                logger.debug(f"{self.prefix} Failed to record trade stats: {e}")
 
             # Update RL learner with trade outcome
             learner_state_key = pos.get("learner_state_key")

@@ -4,7 +4,9 @@ import numpy as np
 from datetime import datetime
 import warnings
 import pickle
+import json
 from pathlib import Path
+from filelock import FileLock, Timeout
 
 warnings.filterwarnings('ignore')
 
@@ -21,6 +23,12 @@ _xgb_model = None
 _last_training_date = None
 _feature_importance = {}
 MODEL_PATH = Path("/home/mboard76/nvidia-workbench/snoogan_app/code/trader/xgb_trend_model.pkl")
+
+# Stats persistence paths
+SCRIPT_DIR = Path(__file__).parent
+STATS_STATE_FILE = SCRIPT_DIR / "indicator_stats_state.json"
+STATS_LOCK_FILE = SCRIPT_DIR / "indicator_stats_state.json.lock"
+MAX_TRADE_HISTORY = 500
 
 
 def _calculate_vwap(df: pd.DataFrame) -> float:
@@ -787,10 +795,695 @@ def get_volatility_regime(bars_1m: pd.DataFrame) -> dict:
         }
 
 
+# =============================================================================
+# STATISTICAL MATH FOR SPREADS (Binomial, Conditional Probability, GARCH, etc.)
+# =============================================================================
+
+# Trade history storage for binomial calculations
+_trade_history = []
+_regime_stats = {}  # {regime: {'wins': int, 'losses': int, 'returns': []}}
+
+
+def _load_stats_state():
+    """Load trade history and regime stats from disk."""
+    global _trade_history, _regime_stats
+
+    if not STATS_STATE_FILE.exists():
+        return
+
+    try:
+        lock = FileLock(str(STATS_LOCK_FILE), timeout=5)
+        with lock:
+            with open(STATS_STATE_FILE, 'r') as f:
+                state = json.load(f)
+                _trade_history = state.get('trade_history', [])
+                _regime_stats = state.get('regime_stats', {})
+                print(f"[Stats] Loaded {len(_trade_history)} trades, {len(_regime_stats)} regimes from disk")
+    except Timeout:
+        print("[Stats] Could not acquire lock for loading state")
+    except Exception as e:
+        print(f"[Stats] Error loading state: {e}")
+
+
+def _save_stats_state():
+    """Persist trade history and regime stats to disk."""
+    global _trade_history, _regime_stats
+
+    try:
+        # Trim history to MAX_TRADE_HISTORY
+        if len(_trade_history) > MAX_TRADE_HISTORY:
+            _trade_history = _trade_history[-MAX_TRADE_HISTORY:]
+
+        # Trim returns per regime to last 100
+        for regime in _regime_stats:
+            if len(_regime_stats[regime].get('returns', [])) > 100:
+                _regime_stats[regime]['returns'] = _regime_stats[regime]['returns'][-100:]
+
+        state = {
+            'trade_history': _trade_history,
+            'regime_stats': _regime_stats,
+            'last_updated': datetime.now().isoformat(),
+            'version': 1
+        }
+
+        lock = FileLock(str(STATS_LOCK_FILE), timeout=5)
+        with lock:
+            temp_file = STATS_STATE_FILE.with_suffix('.json.tmp')
+            with open(temp_file, 'w') as f:
+                json.dump(state, f, indent=2, default=str)
+            temp_file.replace(STATS_STATE_FILE)
+
+    except Timeout:
+        print("[Stats] Could not acquire lock for saving state")
+    except Exception as e:
+        print(f"[Stats] Error saving state: {e}")
+
+
+def record_trade(result: dict):
+    """
+    Record a trade result for statistical tracking.
+
+    Args:
+        result: dict with keys:
+            - pnl: float (profit/loss in dollars)
+            - win: bool (True if profitable)
+            - regime: str (e.g., 'bull', 'bear', 'chop', 'low_vol')
+            - setup_type: str (e.g., 'call_spread', 'put_spread')
+            - entry_time: datetime
+            - holding_period: int (minutes/bars held)
+    """
+    global _trade_history, _regime_stats
+
+    _trade_history.append(result)
+
+    # Update regime stats
+    regime = result.get('regime', 'unknown')
+    if regime not in _regime_stats:
+        _regime_stats[regime] = {'wins': 0, 'losses': 0, 'returns': []}
+
+    if result.get('win', False):
+        _regime_stats[regime]['wins'] += 1
+    else:
+        _regime_stats[regime]['losses'] += 1
+
+    if 'pnl' in result:
+        _regime_stats[regime]['returns'].append(result['pnl'])
+
+    # Persist to disk after each trade
+    _save_stats_state()
+
+
+def get_binomial_win_probability(
+    regime: str = None,
+    setup_type: str = None,
+    min_trades: int = 20
+) -> dict:
+    """
+    Calculate win probability using binomial framework.
+
+    Uses binomial distribution to estimate:
+    - Point estimate of win rate
+    - Confidence interval (Wilson score interval - better for small samples)
+    - Whether we have enough data to trust the estimate
+
+    Args:
+        regime: Filter by market regime (optional)
+        setup_type: Filter by setup type (optional)
+        min_trades: Minimum trades needed for reliable estimate
+
+    Returns:
+        dict with:
+            - win_rate: Point estimate of P(win)
+            - ci_lower: 95% CI lower bound
+            - ci_upper: 95% CI upper bound
+            - n_trades: Sample size
+            - reliable: True if n_trades >= min_trades
+            - avg_win: Average winning trade
+            - avg_loss: Average losing trade
+            - expected_value: (win_rate * avg_win) - (loss_rate * avg_loss)
+    """
+    # Filter trades
+    trades = _trade_history.copy()
+
+    if regime is not None:
+        trades = [t for t in trades if t.get('regime') == regime]
+    if setup_type is not None:
+        trades = [t for t in trades if t.get('setup_type') == setup_type]
+
+    n = len(trades)
+
+    if n == 0:
+        return {
+            'win_rate': 0.5,  # Prior assumption
+            'ci_lower': 0.0,
+            'ci_upper': 1.0,
+            'n_trades': 0,
+            'reliable': False,
+            'avg_win': 0.0,
+            'avg_loss': 0.0,
+            'expected_value': 0.0
+        }
+
+    # Count wins
+    wins = sum(1 for t in trades if t.get('win', False))
+    losses = n - wins
+
+    # Point estimate
+    p_hat = wins / n
+
+    # Wilson score interval (better than normal approximation for small n)
+    # https://en.wikipedia.org/wiki/Binomial_proportion_confidence_interval
+    z = 1.96  # 95% CI
+    denominator = 1 + z**2 / n
+    center = (p_hat + z**2 / (2 * n)) / denominator
+    spread = z * np.sqrt((p_hat * (1 - p_hat) + z**2 / (4 * n)) / n) / denominator
+
+    ci_lower = max(0, center - spread)
+    ci_upper = min(1, center + spread)
+
+    # Calculate average win/loss
+    winning_trades = [t['pnl'] for t in trades if t.get('win') and 'pnl' in t]
+    losing_trades = [t['pnl'] for t in trades if not t.get('win') and 'pnl' in t]
+
+    avg_win = np.mean(winning_trades) if winning_trades else 0.0
+    avg_loss = abs(np.mean(losing_trades)) if losing_trades else 0.0
+
+    # Expected value per trade
+    expected_value = (p_hat * avg_win) - ((1 - p_hat) * avg_loss)
+
+    return {
+        'win_rate': round(p_hat, 4),
+        'ci_lower': round(ci_lower, 4),
+        'ci_upper': round(ci_upper, 4),
+        'n_trades': n,
+        'reliable': n >= min_trades,
+        'avg_win': round(avg_win, 2),
+        'avg_loss': round(avg_loss, 2),
+        'expected_value': round(expected_value, 2)
+    }
+
+
+def get_conditional_expected_value(current_regime: str) -> dict:
+    """
+    Calculate expected value conditioned on current market regime.
+
+    Implements: E[return | regime] using historical data.
+    This is Bayesian in spirit - updating our expectation based on conditions.
+
+    Args:
+        current_regime: Current market regime ('bull', 'bear', 'chop', 'low_vol')
+
+    Returns:
+        dict with:
+            - expected_return: E[return | regime]
+            - regime_win_rate: P(win | regime)
+            - overall_win_rate: P(win) unconditional
+            - regime_advantage: How much better/worse this regime is
+            - sample_size: Number of trades in this regime
+            - recommendation: 'favorable', 'neutral', or 'unfavorable'
+    """
+    # Get overall stats
+    overall = get_binomial_win_probability()
+
+    # Get regime-specific stats
+    regime_stats = get_binomial_win_probability(regime=current_regime)
+
+    # Calculate regime advantage
+    if overall['win_rate'] > 0:
+        regime_advantage = (regime_stats['win_rate'] - overall['win_rate']) / overall['win_rate']
+    else:
+        regime_advantage = 0.0
+
+    # Determine recommendation
+    if regime_stats['n_trades'] < 10:
+        recommendation = 'insufficient_data'
+    elif regime_stats['expected_value'] > 0 and regime_stats['win_rate'] > 0.5:
+        recommendation = 'favorable'
+    elif regime_stats['expected_value'] < 0 or regime_stats['win_rate'] < 0.4:
+        recommendation = 'unfavorable'
+    else:
+        recommendation = 'neutral'
+
+    return {
+        'expected_return': regime_stats['expected_value'],
+        'regime_win_rate': regime_stats['win_rate'],
+        'overall_win_rate': overall['win_rate'],
+        'regime_advantage': round(regime_advantage, 4),
+        'sample_size': regime_stats['n_trades'],
+        'recommendation': recommendation,
+        'ci_lower': regime_stats['ci_lower'],
+        'ci_upper': regime_stats['ci_upper']
+    }
+
+
+def garch_volatility(returns: pd.Series, omega: float = 0.00001, alpha: float = 0.1, beta: float = 0.85) -> dict:
+    """
+    Simple GARCH(1,1) volatility estimation.
+
+    GARCH captures volatility clustering: "After a big move, expect more volatility."
+
+    Model: σ²_t = ω + α * r²_{t-1} + β * σ²_{t-1}
+
+    Where:
+        - ω (omega): Long-term variance constant
+        - α (alpha): Weight on recent squared return (reaction to news)
+        - β (beta): Weight on previous variance (persistence)
+        - α + β < 1 for stationarity (typically α + β ≈ 0.95)
+
+    Args:
+        returns: Series of returns (e.g., close.pct_change())
+        omega: Long-term variance constant (default 0.00001)
+        alpha: ARCH coefficient (default 0.1)
+        beta: GARCH coefficient (default 0.85)
+
+    Returns:
+        dict with:
+            - current_vol: Current GARCH volatility estimate (annualized %)
+            - vol_series: Full volatility series
+            - vol_forecast_1: 1-step ahead forecast
+            - long_term_vol: Unconditional (long-term) volatility
+            - vol_regime: 'high', 'normal', or 'low' relative to long-term
+    """
+    if returns is None or len(returns) < 30:
+        return {
+            'current_vol': 0.0,
+            'vol_series': None,
+            'vol_forecast_1': 0.0,
+            'long_term_vol': 0.0,
+            'vol_regime': 'unknown'
+        }
+
+    returns = returns.dropna()
+    n = len(returns)
+
+    # Initialize variance with sample variance
+    var_series = np.zeros(n)
+    var_series[0] = returns.var()
+
+    # GARCH(1,1) recursion
+    for t in range(1, n):
+        var_series[t] = omega + alpha * returns.iloc[t-1]**2 + beta * var_series[t-1]
+
+    # Current volatility (annualized, assuming 1-min bars -> ~252*390 bars/year)
+    # Adjust multiplier based on your bar frequency
+    current_var = var_series[-1]
+    current_vol = np.sqrt(current_var) * np.sqrt(252 * 390) * 100  # Annualized %
+
+    # 1-step forecast
+    vol_forecast_var = omega + alpha * returns.iloc[-1]**2 + beta * current_var
+    vol_forecast_1 = np.sqrt(vol_forecast_var) * np.sqrt(252 * 390) * 100
+
+    # Long-term (unconditional) volatility: σ² = ω / (1 - α - β)
+    if (alpha + beta) < 1:
+        long_term_var = omega / (1 - alpha - beta)
+        long_term_vol = np.sqrt(long_term_var) * np.sqrt(252 * 390) * 100
+    else:
+        long_term_vol = current_vol  # Fallback if non-stationary
+
+    # Determine volatility regime
+    vol_ratio = current_vol / long_term_vol if long_term_vol > 0 else 1.0
+    if vol_ratio > 1.3:
+        vol_regime = 'high'
+    elif vol_ratio < 0.7:
+        vol_regime = 'low'
+    else:
+        vol_regime = 'normal'
+
+    return {
+        'current_vol': round(current_vol, 2),
+        'vol_series': pd.Series(np.sqrt(var_series) * np.sqrt(252 * 390) * 100, index=returns.index),
+        'vol_forecast_1': round(vol_forecast_1, 2),
+        'long_term_vol': round(long_term_vol, 2),
+        'vol_regime': vol_regime
+    }
+
+
+def get_spread_zscore(
+    spread_series: pd.Series,
+    lookback: int = 20,
+    entry_threshold: float = 2.0,
+    exit_threshold: float = 0.5
+) -> dict:
+    """
+    Calculate z-score of spread for mean reversion signals.
+
+    For spread trading (pairs, options spreads), we want to know:
+    - How far is current spread from its mean?
+    - Is it likely to revert?
+
+    Z-score = (current - mean) / std
+
+    Args:
+        spread_series: Series of spread values (e.g., price_A - price_B, or option spread price)
+        lookback: Window for mean/std calculation
+        entry_threshold: Z-score magnitude for entry signal (default 2.0)
+        exit_threshold: Z-score magnitude for exit signal (default 0.5)
+
+    Returns:
+        dict with:
+            - zscore: Current z-score
+            - mean: Rolling mean
+            - std: Rolling std
+            - upper_band: mean + entry_threshold * std
+            - lower_band: mean - entry_threshold * std
+            - signal: 'long' (z < -threshold), 'short' (z > threshold), 'exit', or 'hold'
+            - half_life: Estimated mean reversion half-life in bars
+    """
+    if spread_series is None or len(spread_series) < lookback:
+        return {
+            'zscore': 0.0,
+            'mean': 0.0,
+            'std': 0.0,
+            'upper_band': 0.0,
+            'lower_band': 0.0,
+            'signal': 'hold',
+            'half_life': None
+        }
+
+    # Calculate rolling statistics
+    roll_mean = spread_series.rolling(lookback).mean()
+    roll_std = spread_series.rolling(lookback).std()
+
+    current_spread = spread_series.iloc[-1]
+    current_mean = roll_mean.iloc[-1]
+    current_std = roll_std.iloc[-1]
+
+    if current_std == 0 or np.isnan(current_std):
+        zscore = 0.0
+    else:
+        zscore = (current_spread - current_mean) / current_std
+
+    # Calculate bands
+    upper_band = current_mean + entry_threshold * current_std
+    lower_band = current_mean - entry_threshold * current_std
+
+    # Determine signal
+    if zscore < -entry_threshold:
+        signal = 'long'  # Spread is cheap, expect reversion up
+    elif zscore > entry_threshold:
+        signal = 'short'  # Spread is expensive, expect reversion down
+    elif abs(zscore) < exit_threshold:
+        signal = 'exit'  # Close to mean, exit positions
+    else:
+        signal = 'hold'
+
+    # Estimate half-life using Ornstein-Uhlenbeck model
+    # Half-life = -ln(2) / ln(β) where β is AR(1) coefficient
+    half_life = None
+    try:
+        if len(spread_series) >= lookback + 10:
+            spread_lag = spread_series.shift(1).dropna()
+            spread_now = spread_series.iloc[1:]
+
+            # Simple AR(1) regression: spread_t = α + β * spread_{t-1} + ε
+            if len(spread_lag) > 10:
+                beta = np.corrcoef(spread_lag, spread_now)[0, 1]
+                if 0 < beta < 1:
+                    half_life = -np.log(2) / np.log(beta)
+                    half_life = round(half_life, 1)
+    except:
+        pass
+
+    return {
+        'zscore': round(zscore, 3),
+        'mean': round(current_mean, 4),
+        'std': round(current_std, 4),
+        'upper_band': round(upper_band, 4),
+        'lower_band': round(lower_band, 4),
+        'signal': signal,
+        'half_life': half_life
+    }
+
+
+def get_rolling_sharpe(
+    returns: pd.Series,
+    window: int = 60,
+    risk_free_rate: float = 0.05,
+    annualization_factor: int = 252 * 390
+) -> dict:
+    """
+    Calculate rolling Sharpe ratio for performance tracking.
+
+    Sharpe = (Return - Risk_Free) / Volatility
+
+    Measures risk-adjusted returns. Higher = better.
+    - Sharpe > 1.0: Good
+    - Sharpe > 2.0: Very good
+    - Sharpe > 3.0: Excellent (rare, check for overfitting)
+
+    Args:
+        returns: Series of returns (e.g., strategy PnL or pct returns)
+        window: Rolling window in bars
+        risk_free_rate: Annual risk-free rate (default 5%)
+        annualization_factor: Bars per year (default 252*390 for 1-min bars)
+
+    Returns:
+        dict with:
+            - current_sharpe: Most recent Sharpe ratio (annualized)
+            - sharpe_series: Full rolling Sharpe series
+            - sharpe_trend: 'improving', 'stable', or 'degrading'
+            - cumulative_return: Total return over window
+            - volatility: Annualized volatility
+            - sortino: Sortino ratio (uses downside vol only)
+    """
+    if returns is None or len(returns) < window:
+        return {
+            'current_sharpe': 0.0,
+            'sharpe_series': None,
+            'sharpe_trend': 'unknown',
+            'cumulative_return': 0.0,
+            'volatility': 0.0,
+            'sortino': 0.0
+        }
+
+    returns = returns.dropna()
+
+    # Per-bar risk-free rate
+    rf_per_bar = risk_free_rate / annualization_factor
+
+    # Rolling calculations
+    roll_mean = returns.rolling(window).mean()
+    roll_std = returns.rolling(window).std()
+
+    # Sharpe ratio (annualized)
+    excess_return = roll_mean - rf_per_bar
+    sharpe_series = (excess_return / roll_std) * np.sqrt(annualization_factor)
+    sharpe_series = sharpe_series.replace([np.inf, -np.inf], 0)
+
+    current_sharpe = sharpe_series.iloc[-1] if not np.isnan(sharpe_series.iloc[-1]) else 0.0
+
+    # Cumulative return over window
+    cumulative_return = (1 + returns.iloc[-window:]).prod() - 1 if len(returns) >= window else 0.0
+
+    # Annualized volatility
+    volatility = roll_std.iloc[-1] * np.sqrt(annualization_factor) * 100 if not np.isnan(roll_std.iloc[-1]) else 0.0
+
+    # Sortino ratio (downside deviation only)
+    downside_returns = returns.copy()
+    downside_returns[downside_returns > 0] = 0
+    roll_downside_std = downside_returns.rolling(window).std()
+    sortino = (excess_return.iloc[-1] / roll_downside_std.iloc[-1]) * np.sqrt(annualization_factor) if roll_downside_std.iloc[-1] > 0 else 0.0
+
+    # Determine Sharpe trend
+    if len(sharpe_series) >= window:
+        recent_sharpe = sharpe_series.iloc[-10:].mean()
+        older_sharpe = sharpe_series.iloc[-window:-window+10].mean()
+
+        if recent_sharpe > older_sharpe + 0.3:
+            sharpe_trend = 'improving'
+        elif recent_sharpe < older_sharpe - 0.3:
+            sharpe_trend = 'degrading'
+        else:
+            sharpe_trend = 'stable'
+    else:
+        sharpe_trend = 'unknown'
+
+    return {
+        'current_sharpe': round(current_sharpe, 3),
+        'sharpe_series': sharpe_series,
+        'sharpe_trend': sharpe_trend,
+        'cumulative_return': round(cumulative_return * 100, 2),  # As percentage
+        'volatility': round(volatility, 2),
+        'sortino': round(sortino, 3) if not np.isnan(sortino) else 0.0
+    }
+
+
+def get_kelly_criterion(win_rate: float, avg_win: float, avg_loss: float) -> dict:
+    """
+    Calculate Kelly Criterion for optimal position sizing.
+
+    Kelly% = W - (1-W)/R
+    Where:
+        W = Win rate
+        R = Win/Loss ratio (avg_win / avg_loss)
+
+    Kelly tells you the optimal fraction of capital to risk.
+    Most traders use fractional Kelly (25-50%) for safety.
+
+    Args:
+        win_rate: Probability of winning (0-1)
+        avg_win: Average winning trade amount
+        avg_loss: Average losing trade amount (positive number)
+
+    Returns:
+        dict with:
+            - full_kelly: Optimal fraction (can be > 1 or negative)
+            - half_kelly: Conservative recommendation
+            - quarter_kelly: Very conservative recommendation
+            - edge: Mathematical edge per trade
+            - recommendation: Position sizing recommendation
+    """
+    if avg_loss == 0 or win_rate <= 0 or win_rate >= 1:
+        return {
+            'full_kelly': 0.0,
+            'half_kelly': 0.0,
+            'quarter_kelly': 0.0,
+            'edge': 0.0,
+            'recommendation': 'no_edge'
+        }
+
+    # Win/Loss ratio
+    R = avg_win / avg_loss
+
+    # Kelly formula
+    W = win_rate
+    kelly = W - (1 - W) / R
+
+    # Edge per trade
+    edge = (W * avg_win) - ((1 - W) * avg_loss)
+
+    # Fractional Kelly (safer)
+    half_kelly = kelly / 2
+    quarter_kelly = kelly / 4
+
+    # Recommendation
+    if kelly <= 0:
+        recommendation = 'no_edge'
+    elif kelly < 0.1:
+        recommendation = 'small_edge'
+    elif kelly < 0.25:
+        recommendation = 'moderate_edge'
+    else:
+        recommendation = 'strong_edge'
+
+    return {
+        'full_kelly': round(max(0, kelly), 4),
+        'half_kelly': round(max(0, half_kelly), 4),
+        'quarter_kelly': round(max(0, quarter_kelly), 4),
+        'edge': round(edge, 2),
+        'recommendation': recommendation
+    }
+
+
+def get_spread_statistics(bars_1m: pd.DataFrame) -> dict:
+    """
+    Comprehensive spread statistics combining all new indicators.
+
+    Call this to get a full statistical picture for spread trading decisions.
+
+    Args:
+        bars_1m: DataFrame with OHLCV data
+
+    Returns:
+        dict with all statistical metrics for spread trading
+    """
+    if bars_1m is None or bars_1m.empty or len(bars_1m) < 60:
+        return {
+            'garch': {'current_vol': 0.0, 'vol_regime': 'unknown'},
+            'sharpe': {'current_sharpe': 0.0, 'sharpe_trend': 'unknown'},
+            'binomial': {'win_rate': 0.5, 'reliable': False},
+            'kelly': {'half_kelly': 0.0, 'recommendation': 'no_edge'}
+        }
+
+    returns = bars_1m['close'].pct_change().dropna()
+
+    # GARCH volatility
+    garch = garch_volatility(returns)
+
+    # Rolling Sharpe
+    sharpe = get_rolling_sharpe(returns)
+
+    # Binomial win probability (overall)
+    binomial = get_binomial_win_probability()
+
+    # Kelly criterion based on historical trades
+    kelly = get_kelly_criterion(
+        binomial['win_rate'],
+        binomial['avg_win'],
+        binomial['avg_loss']
+    )
+
+    # Get current regime for conditional stats
+    volatility_regime = get_volatility_regime(bars_1m)
+    current_regime = 'low_vol' if volatility_regime['is_low_vol'] else get_trend_signal(bars_1m)
+    conditional_ev = get_conditional_expected_value(current_regime)
+
+    return {
+        'garch': {
+            'current_vol': garch['current_vol'],
+            'vol_forecast': garch['vol_forecast_1'],
+            'long_term_vol': garch['long_term_vol'],
+            'vol_regime': garch['vol_regime']
+        },
+        'sharpe': {
+            'current_sharpe': sharpe['current_sharpe'],
+            'sortino': sharpe['sortino'],
+            'sharpe_trend': sharpe['sharpe_trend'],
+            'volatility': sharpe['volatility']
+        },
+        'binomial': {
+            'win_rate': binomial['win_rate'],
+            'ci_lower': binomial['ci_lower'],
+            'ci_upper': binomial['ci_upper'],
+            'n_trades': binomial['n_trades'],
+            'reliable': binomial['reliable'],
+            'expected_value': binomial['expected_value']
+        },
+        'conditional': {
+            'regime': current_regime,
+            'regime_win_rate': conditional_ev['regime_win_rate'],
+            'regime_advantage': conditional_ev['regime_advantage'],
+            'recommendation': conditional_ev['recommendation']
+        },
+        'kelly': {
+            'half_kelly': kelly['half_kelly'],
+            'quarter_kelly': kelly['quarter_kelly'],
+            'edge': kelly['edge'],
+            'recommendation': kelly['recommendation']
+        }
+    }
+
+
+def clear_trade_history():
+    """Clear trade history for fresh start and persist to disk."""
+    global _trade_history, _regime_stats
+    _trade_history = []
+    _regime_stats = {}
+    _save_stats_state()
+
+
+def get_trade_history_summary() -> dict:
+    """Get summary of recorded trades."""
+    n_trades = len(_trade_history)
+    if n_trades == 0:
+        return {'n_trades': 0, 'regimes': {}}
+
+    return {
+        'n_trades': n_trades,
+        'regimes': {k: {'wins': v['wins'], 'losses': v['losses']} for k, v in _regime_stats.items()}
+    }
+
+
 # Backward compatibility aliases
 def train_lstm_daily(bars_1m: pd.DataFrame, **kwargs):
     """Alias for backward compatibility - calls XGBoost training."""
     train_xgb_daily(bars_1m)
+
+
+# =============================================================================
+# Load persisted stats on module import
+# =============================================================================
+_load_stats_state()
 
 
 # Try to load saved model on import

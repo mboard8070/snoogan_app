@@ -6,7 +6,7 @@ import { EquityChart } from './components/EquityChart'
 import { ChatBox } from './components/ChatBox'
 import TradingLogs from './components/TradingLogs'
 import RLLearner from './components/RLLearner'
-import LiveCharts from './components/LiveCharts'
+import IndicatorStats from './components/IndicatorStats'
 
 // Type definition for the data returned by /api/state
 interface DashboardState {
@@ -22,7 +22,7 @@ interface DashboardState {
   positions_scalp?: Record<string, any>
 }
 
-type TabType = 'dashboard' | 'logs' | 'learner' | 'charts'
+type TabType = 'dashboard' | 'logs' | 'learner' | 'stats'
 
 function App() {
   const [state, setState] = useState<DashboardState | null>(null)
@@ -82,7 +82,7 @@ function App() {
     { id: 'dashboard', label: 'Dashboard' },
     { id: 'logs', label: 'Trading Logs' },
     { id: 'learner', label: 'RL Learner' },
-    { id: 'charts', label: 'Live Charts' },
+    { id: 'stats', label: 'Binomial Stats' },
   ]
 
   return (
@@ -167,8 +167,8 @@ function App() {
       {/* RL Learner Tab */}
       {activeTab === 'learner' && <RLLearner />}
 
-      {/* Live Charts Tab */}
-      {activeTab === 'charts' && <LiveCharts />}
+      {/* Binomial Stats Tab */}
+      {activeTab === 'stats' && <IndicatorStats />}
     </div>
   )
 }

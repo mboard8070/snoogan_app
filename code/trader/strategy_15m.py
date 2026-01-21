@@ -17,8 +17,25 @@ from typing import Optional, Dict, Any, Tuple, List
 
 # Import your existing modules
 from code.data.data_client import data_client
-from indicators import get_trend_signal, get_full_indicator_set, get_volatility_regime
+from indicators import (
+    get_trend_signal, get_full_indicator_set, get_volatility_regime, record_trade,
+    get_binomial_win_probability, get_conditional_expected_value, get_kelly_criterion
+)
 from discord_notifier import send_entry, send_exit, set_strategy_ready
+
+# Import brain for trade decisions (optional - fails gracefully)
+try:
+    from code.rag.snoogans_brain import SnoogansBrain
+    BRAIN_AVAILABLE = True
+except ImportError:
+    BRAIN_AVAILABLE = False
+
+# Import adaptive learner for RL-based entry decisions
+try:
+    from code.rag.adaptive_learner import get_learner
+    LEARNER_AVAILABLE = True
+except ImportError:
+    LEARNER_AVAILABLE = False
 
 # Configure logging - use INFO for production, DEBUG for troubleshooting
 logging.basicConfig(
@@ -108,6 +125,26 @@ class TradingStrategy15m:
         except Exception as e:
             logger.error(f"{self.prefix} Failed to initialize: {e}", exc_info=True)
             raise
+
+        # Initialize brain for trade decisions
+        self.brain = None
+        if BRAIN_AVAILABLE:
+            try:
+                self.brain = SnoogansBrain()
+                logger.info(f"{self.prefix} Brain loaded - will use historical patterns for trade decisions")
+            except Exception as e:
+                logger.warning(f"{self.prefix} Brain not available: {e}")
+                self.brain = None
+
+        # Initialize adaptive learner for RL-based entry decisions
+        self.learner = None
+        if LEARNER_AVAILABLE:
+            try:
+                self.learner = get_learner()
+                stats = self.learner.get_stats()
+                logger.info(f"{self.prefix} Adaptive learner loaded - {stats['total_states']} learned states")
+            except Exception as e:
+                logger.warning(f"{self.prefix} Adaptive learner not available: {e}")
 
     @contextmanager
     def _state_lock(self, timeout: int = 5):
@@ -390,6 +427,16 @@ class TradingStrategy15m:
         except Exception as e:
             logger.error(f"{self.prefix} Error managing positions: {e}", exc_info=True)
 
+        # Update counterfactual tracking for RL learner
+        if self.learner:
+            try:
+                expired = self.learner.expire_old_counterfactuals(max_age_minutes=10)
+                for cf in expired:
+                    logger.info(f"{self.prefix} Counterfactual resolved: {cf['ticker']} | "
+                               f"Would have P&L: ${cf['would_have_pnl']:+.2f} | {cf['outcome']}")
+            except Exception as e:
+                logger.debug(f"{self.prefix} Counterfactual update error: {e}")
+
         # Save state and archive trades
         try:
             self._save_state()
@@ -582,6 +629,53 @@ class TradingStrategy15m:
             logger.error(f"{self.prefix} Error calculating spread price: {e}")
             return None
 
+    def _get_adaptive_exits(self, ticker: str, is_put: bool, market_context: dict) -> dict:
+        """
+        Get adaptive exit parameters from brain based on historical patterns.
+        Returns default values if brain unavailable or insufficient data.
+        """
+        # Default exit parameters for credit spreads
+        defaults = {
+            'profit_target_pct': 50.0,   # Take profit at 50% of max credit
+            'stop_loss_pct': 100.0,      # Stop at 2x credit (100% loss)
+            'trail_activation_pct': 50.0,  # Activate trailing at 50%
+            'confidence': 0,
+            'source': 'default'
+        }
+
+        if not self.brain:
+            return defaults
+
+        try:
+            # Determine trade type
+            trade_type = 'PUT_SPREAD' if is_put else 'CALL_SPREAD'
+
+            # Get optimal exits from brain
+            optimal = self.brain.get_optimal_exits(
+                ticker=ticker,
+                trend=market_context.get('trend'),
+                trade_type=trade_type
+            )
+
+            # Only use brain values if confidence is high enough
+            if optimal.get('confidence', 0) >= 50 and optimal.get('sample_size', 0) >= 10:
+                return {
+                    'profit_target_pct': min(optimal.get('profit_target_pct', 50.0), 80.0),
+                    'stop_loss_pct': min(optimal.get('stop_loss_pct', 100.0), 150.0),
+                    'trail_activation_pct': max(30.0, min(optimal.get('profit_target_pct', 50.0) * 0.6, 50.0)),
+                    'confidence': optimal.get('confidence', 0),
+                    'source': 'brain',
+                    'analysis': optimal.get('analysis', '')
+                }
+
+            logger.debug(f"{self.prefix} [{ticker}] Brain exit data insufficient "
+                        f"(conf={optimal.get('confidence', 0)}, n={optimal.get('sample_size', 0)}) - using defaults")
+
+        except Exception as e:
+            logger.debug(f"{self.prefix} [{ticker}] Brain exit query failed: {e}")
+
+        return defaults
+
     def _attempt_entry(self, ticker: str, trend: str, chain: pd.DataFrame,
                       price: float, expiration_date: str, bars: pd.DataFrame = None, vol_regime: dict = None):
         """Attempt to enter a new credit spread position"""
@@ -608,10 +702,116 @@ class TradingStrategy15m:
             "atr": indicators.get("atr", 0.0),
             "trend_strength": indicators.get("trend_strength", 0.0),
         }
-        
+
+        # ============ AI DECISION LAYER ============
+        # Default confidence/win_rate if brain unavailable
+        brain_confidence = 50.0
+        brain_win_rate = 50.0
+        learner_state_key = None
+
+        # Query brain for trade recommendation if available
+        if self.brain:
+            try:
+                if bars is not None and len(bars) >= 30:
+                    recommendation = self.brain.get_live_recommendation(
+                        ticker=ticker,
+                        bars=bars,
+                        is_call=not is_put  # For spreads: put_spread = bullish bias
+                    )
+
+                    if not recommendation['should_enter']:
+                        reason = recommendation.get('final_reason', recommendation.get('reason', 'Unknown'))
+                        warnings = recommendation.get('indicator_warnings', [])
+                        logger.info(f"{self.prefix} [{ticker}] Brain says SKIP: {reason}")
+                        if warnings:
+                            logger.info(f"{self.prefix} [{ticker}] Warnings: {', '.join(warnings)}")
+                        return
+
+                    hist = recommendation.get('historical_analysis', {})
+                    brain_confidence = hist.get('confidence', 50.0)
+                    brain_win_rate = hist.get('avg_win_rate', 50.0)
+
+                    # Conservative mode: require higher confidence and win rate
+                    if conservative:
+                        min_confidence = 60
+                        min_win_rate = 50
+                        if brain_confidence < min_confidence or brain_win_rate < min_win_rate:
+                            logger.info(f"{self.prefix} [{ticker}] NO TRADE (CONSERVATIVE): "
+                                       f"Brain confidence {brain_confidence:.0f}% < {min_confidence}% or "
+                                       f"win rate {brain_win_rate:.0f}% < {min_win_rate}%")
+                            return
+
+                    logger.info(f"{self.prefix} [{ticker}] Brain says ENTER: "
+                              f"Win rate: {brain_win_rate:.0f}% | Confidence: {brain_confidence:.0f}%")
+
+            except Exception as e:
+                if conservative:
+                    logger.info(f"{self.prefix} [{ticker}] NO TRADE (CONSERVATIVE): Brain unavailable - {e}")
+                    return
+                logger.warning(f"{self.prefix} Brain query failed: {e} - proceeding with trade")
+
+        # RL learner decision
+        if self.learner and market_context:
+            try:
+                learner_state_key = self.learner.get_state_key(
+                    ticker=ticker,
+                    trend=trend,
+                    rsi=market_context.get('rsi', 50.0),
+                    hour=now.hour,
+                    confidence=brain_confidence
+                )
+
+                rl_decision = self.learner.should_enter(learner_state_key, brain_win_rate)
+
+                if not rl_decision['should_enter']:
+                    q_vals = rl_decision.get('q_values', {})
+                    if q_vals.get('skip', 0) > q_vals.get('enter', 0) + 0.2:
+                        logger.info(f"{self.prefix} [{ticker}] RL Learner says SKIP: {rl_decision['reason']}")
+                        return
+                    else:
+                        logger.info(f"{self.prefix} [{ticker}] Weak RL skip - proceeding anyway")
+                else:
+                    if rl_decision.get('exploration'):
+                        logger.info(f"{self.prefix} [{ticker}] RL Learner: EXPLORATION entry")
+                    else:
+                        logger.info(f"{self.prefix} [{ticker}] RL Learner says ENTER: {rl_decision['reason']}")
+
+            except Exception as e:
+                logger.debug(f"{self.prefix} [{ticker}] RL learner error: {e}")
+
+        # Get adaptive exit parameters from brain
+        exit_params = self._get_adaptive_exits(ticker, is_put, market_context)
+        if exit_params.get('source') == 'brain':
+            logger.info(f"{self.prefix} [{ticker}] Using brain exits: "
+                       f"PT={exit_params['profit_target_pct']:.0f}%, "
+                       f"SL={exit_params['stop_loss_pct']:.0f}%")
+
+        # ============ STATISTICAL FILTERING ============
+        # Query binomial stats and conditional EV for regime filtering
+        setup_type = 'put_spread' if is_put else 'call_spread'
+        binomial_stats = get_binomial_win_probability(regime=trend, setup_type=setup_type)
+
+        # If we have reliable stats and regime is unfavorable, skip
+        if binomial_stats['reliable'] and binomial_stats['expected_value'] < 0:
+            logger.info(f"{self.prefix} [{ticker}] SKIP (STATS): Negative expected value for {trend} regime "
+                       f"(EV=${binomial_stats['expected_value']:.2f}, n={binomial_stats['n_trades']})")
+            return
+
+        # Get conditional EV for current regime
+        conditional = get_conditional_expected_value(trend)
+        if conditional['recommendation'] == 'unfavorable' and conditional['sample_size'] >= 10:
+            logger.info(f"{self.prefix} [{ticker}] SKIP (STATS): Regime {trend} historically unfavorable "
+                       f"(win_rate={conditional['regime_win_rate']:.1%})")
+            return
+
+        # Log stats if available
+        if binomial_stats['n_trades'] > 0:
+            logger.debug(f"{self.prefix} [{ticker}] Stats: win_rate={binomial_stats['win_rate']:.1%}, "
+                        f"EV=${binomial_stats['expected_value']:.2f}, n={binomial_stats['n_trades']}")
+
         # Validate chain columns
-        type_col = next((c for c in ['type', 'contract_type', 'option_type', 
-                                      'right', 'call_put', 't'] 
+        type_col = next((c for c in ['type', 'contract_type', 'option_type',
+                                      'right', 'call_put', 't']
                         if c in chain.columns), None)
         if type_col is None:
             logger.warning(f"{self.prefix} [{ticker}] No option type column found")
@@ -663,11 +863,30 @@ class TradingStrategy15m:
         short_strike = float(best_short[strike_col])
         long_strike = float(best_long[strike_col])
 
-        # Calculate adaptive position size
-        # Use trend_strength as confidence proxy (scaled 0-100)
-        trend_strength = abs(indicators.get("trend_strength", 0.0))
-        confidence = min(100, trend_strength * 100 + 50)  # Center at 50, scale up
-        contracts = self._calculate_position_size(confidence=confidence, win_rate=50.0, vol_regime=vol_regime)
+        # Calculate adaptive position size using brain confidence/win_rate
+        contracts = self._calculate_position_size(
+            confidence=brain_confidence,
+            win_rate=brain_win_rate,
+            vol_regime=vol_regime
+        )
+
+        # Kelly criterion adjustment if we have reliable stats
+        if binomial_stats['reliable']:
+            kelly = get_kelly_criterion(
+                binomial_stats['win_rate'],
+                binomial_stats['avg_win'],
+                binomial_stats['avg_loss']
+            )
+
+            if kelly['recommendation'] in ['moderate_edge', 'strong_edge']:
+                # Scale up position using half-Kelly fraction (max 50% increase)
+                kelly_multiplier = min(1.5, 1 + kelly['half_kelly'])
+                contracts = int(contracts * kelly_multiplier)
+                logger.info(f"{self.prefix} [{ticker}] Kelly boost: {kelly['half_kelly']:.1%} -> {contracts} contracts")
+            elif kelly['recommendation'] == 'no_edge':
+                # Reduce position if no statistical edge
+                contracts = max(5, contracts // 2)
+                logger.info(f"{self.prefix} [{ticker}] Kelly reduction: no edge -> {contracts} contracts")
 
         # Store position with market context for learning
         self.positions[ticker] = {
@@ -683,6 +902,10 @@ class TradingStrategy15m:
             "entry_time": datetime.now(EST).isoformat(),
             "expiration_date": expiration_date,
             "market_context": market_context,
+            # AI decision tracking
+            "learner_state_key": learner_state_key,
+            "profit_target_pct": exit_params.get('profit_target_pct', 50.0),
+            "stop_loss_pct": exit_params.get('stop_loss_pct', 100.0),
         }
 
         self.trades_today.append("entry")
@@ -1004,6 +1227,35 @@ class TradingStrategy15m:
                 "hold_duration_minutes": round(hold_duration_minutes, 1),
             }
             self.closed_trades.append(closed_trade)
+
+            # Record trade for statistical tracking (binomial, conditional EV, etc.)
+            try:
+                record_trade({
+                    'pnl': realized_pnl,
+                    'win': realized_pnl > 0,
+                    'regime': market_ctx.get('trend', 'unknown'),
+                    'setup_type': 'put_spread' if pos['is_put'] else 'call_spread',
+                    'entry_time': entry_time_str,
+                    'holding_period': hold_duration_minutes,
+                    'exit_reason': exit_reason,
+                    'ticker': ticker,
+                })
+            except Exception as e:
+                logger.debug(f"{self.prefix} Failed to record trade stats: {e}")
+
+            # Update RL learner with trade outcome
+            learner_state_key = pos.get("learner_state_key")
+            if self.learner and learner_state_key:
+                try:
+                    max_risk = credit * pos.get("contracts", 10) * 100
+                    self.learner.record_trade_outcome(
+                        state_key=learner_state_key,
+                        pnl=realized_pnl,
+                        max_risk=max_risk
+                    )
+                    logger.debug(f"{self.prefix} [{ticker}] Updated RL learner with P&L=${realized_pnl:+.2f}")
+                except Exception as e:
+                    logger.debug(f"{self.prefix} [{ticker}] RL learner update failed: {e}")
 
             # Remove position
             del self.positions[ticker]

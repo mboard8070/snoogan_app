@@ -112,6 +112,21 @@ try:
 except ImportError:
     LEARNER_AVAILABLE = False
 
+# Import indicator stats functions
+try:
+    from indicators import (
+        get_trade_history_summary,
+        get_binomial_win_probability,
+        get_conditional_expected_value,
+        get_kelly_criterion,
+    )
+    INDICATOR_STATS_AVAILABLE = True
+except ImportError:
+    INDICATOR_STATS_AVAILABLE = False
+
+# Path to indicator stats state file
+INDICATOR_STATS_FILE = PROJECT_ROOT / "code" / "trader" / "indicator_stats_state.json"
+
 
 # =============================================================================
 # SHARED EQUITY HELPERS
@@ -704,9 +719,156 @@ def render_left_column() -> None:
     update_positions()
 
 
+def render_indicator_stats() -> None:
+    """Render the indicator statistics tab."""
+    if not INDICATOR_STATS_AVAILABLE:
+        st.warning("Indicator stats module not available")
+        return
+
+    # Stats display with auto-refresh
+    stats_placeholder = st.empty()
+
+    @st.fragment(run_every=30)
+    def update_stats():
+        with stats_placeholder.container():
+            # Load stats from file
+            regime_stats = {}
+            trade_history = []
+            last_updated = None
+
+            if INDICATOR_STATS_FILE.exists():
+                try:
+                    with open(INDICATOR_STATS_FILE, 'r') as f:
+                        state = json.load(f)
+                        trade_history = state.get("trade_history", [])
+                        regime_stats = state.get("regime_stats", {})
+                        last_updated = state.get("last_updated")
+                except Exception as e:
+                    st.error(f"Error loading stats: {e}")
+                    return
+
+            # Get summary
+            try:
+                summary = get_trade_history_summary()
+            except Exception as e:
+                summary = {"total_trades": 0, "win_rate": 0, "avg_win": 0, "avg_loss": 0, "total_pnl": 0}
+
+            # Summary metrics header
+            st.subheader("📊 Binomial Statistics")
+            col1, col2, col3, col4, col5 = st.columns(5)
+            col1.metric("Total Trades", summary.get("total_trades", 0))
+            col2.metric("Win Rate", f"{summary.get('win_rate', 0):.1f}%")
+            col3.metric("Avg Win", f"${summary.get('avg_win', 0):.2f}")
+            col4.metric("Avg Loss", f"${summary.get('avg_loss', 0):.2f}")
+            col5.metric("Total P&L", f"${summary.get('total_pnl', 0):+.2f}")
+
+            st.divider()
+
+            # Regime breakdown
+            st.subheader("Win Rate by Regime")
+            regime_cols = st.columns(3)
+
+            for i, regime in enumerate(["bull", "bear", "chop"]):
+                with regime_cols[i]:
+                    st.markdown(f"**{regime.upper()}**")
+
+                    # Raw stats
+                    rs = regime_stats.get(regime, {})
+                    wins = rs.get("wins", 0)
+                    losses = rs.get("losses", 0)
+                    total = wins + losses
+
+                    if total > 0:
+                        raw_win_rate = wins / total * 100
+                        st.write(f"Record: {wins}W / {losses}L")
+                        st.write(f"Win Rate: {raw_win_rate:.1f}%")
+
+                        # Binomial confidence interval
+                        try:
+                            binomial = get_binomial_win_probability(regime=regime)
+                            ci = binomial.get("confidence_interval", [0, 1])
+                            ev = binomial.get("expected_value", 0)
+                            reliable = binomial.get("reliable", False)
+
+                            st.write(f"95% CI: [{ci[0]*100:.0f}% - {ci[1]*100:.0f}%]")
+                            st.write(f"Expected Value: ${ev:.2f}")
+
+                            if reliable:
+                                st.success("Statistically Reliable")
+                            else:
+                                st.warning(f"Need {20 - total} more trades")
+                        except Exception:
+                            pass
+
+                        # Conditional EV
+                        try:
+                            cond_ev = get_conditional_expected_value(regime)
+                            rec = cond_ev.get("recommendation", "neutral")
+                            if rec == "favorable":
+                                st.success(f"Favorable")
+                            elif rec == "unfavorable":
+                                st.error(f"Unfavorable")
+                            else:
+                                st.info(f"Neutral")
+                        except Exception:
+                            pass
+                    else:
+                        st.caption("No data yet")
+
+            st.divider()
+
+            # Kelly Criterion
+            if summary.get("total_trades", 0) >= 5:
+                try:
+                    win_rate = summary.get("win_rate", 50) / 100
+                    avg_win = summary.get("avg_win", 100)
+                    avg_loss = abs(summary.get("avg_loss", -100))
+                    if avg_loss > 0:
+                        kelly = get_kelly_criterion(win_rate, avg_win, avg_loss)
+
+                        st.subheader("Kelly Criterion")
+                        kelly_cols = st.columns(4)
+                        kelly_cols[0].metric("Full Kelly", f"{kelly.get('kelly_fraction', 0)*100:.1f}%")
+                        kelly_cols[1].metric("Half Kelly", f"{kelly.get('half_kelly', 0)*100:.1f}%")
+                        kelly_cols[2].metric("Max Bet", f"{kelly.get('max_bet_percent', 0):.1f}%")
+                        kelly_cols[3].metric("Edge", kelly.get("recommendation", "unknown").replace("_", " ").upper())
+
+                        st.divider()
+                except Exception:
+                    pass
+
+            # Recent trades
+            if trade_history:
+                st.subheader("Recent Trades")
+                recent_trades = trade_history[-10:][::-1]  # Last 10, reversed
+                trades_data = []
+                for t in recent_trades:
+                    trades_data.append({
+                        "Time": str(t.get("entry_time", ""))[:16],
+                        "Ticker": t.get("ticker", ""),
+                        "Setup": t.get("setup_type", ""),
+                        "Regime": t.get("regime", "").upper(),
+                        "P&L": t.get("pnl", 0),
+                        "Result": "WIN" if t.get("win") else "LOSS"
+                    })
+                st.dataframe(
+                    pd.DataFrame(trades_data),
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "P&L": st.column_config.NumberColumn(format="$%.2f"),
+                    }
+                )
+
+            if last_updated:
+                st.caption(f"Last updated: {last_updated}")
+
+    update_stats()
+
+
 def render_right_column() -> None:
     """Render the right column with chat and trading logs."""
-    tab_chat, tab_logs, tab_learner = st.tabs(["💬 Iron Spark Chat", "📜 Trading Logs", "🧠 RL Learner"])
+    tab_chat, tab_logs, tab_learner, tab_stats = st.tabs(["💬 Iron Spark Chat", "📜 Trading Logs", "🧠 RL Learner", "📊 Binomial Stats"])
 
     with tab_chat:
         render_chat_interface(tab_chat)
@@ -716,6 +878,9 @@ def render_right_column() -> None:
 
     with tab_learner:
         render_learner_monitor()
+
+    with tab_stats:
+        render_indicator_stats()
 
 
 def render_learner_monitor() -> None:
