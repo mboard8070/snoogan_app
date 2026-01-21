@@ -9,11 +9,13 @@ interface RegimeStat {
 
 interface BinomialStat {
   win_rate: number
-  confidence_interval: [number, number]
-  sample_size: number
+  ci_lower: number
+  ci_upper: number
+  n_trades: number
   reliable: boolean
   expected_value: number
-  recommendation: string
+  avg_win: number
+  avg_loss: number
   error?: string
 }
 
@@ -26,10 +28,14 @@ interface KellyStat {
 }
 
 interface ConditionalEV {
-  conditional_win_rate: number
-  expected_value: number
+  expected_return: number
+  regime_win_rate: number
+  overall_win_rate: number
+  regime_advantage: number
   sample_size: number
   recommendation: string
+  ci_lower: number
+  ci_upper: number
   error?: string
 }
 
@@ -48,11 +54,8 @@ interface IndicatorStatsData {
   kelly_stats: KellyStat
   conditional_ev: Record<string, ConditionalEV>
   summary?: {
-    total_trades: number
-    win_rate: number
-    avg_win: number
-    avg_loss: number
-    total_pnl: number
+    n_trades: number
+    regimes: Record<string, { wins: number; losses: number }>
   }
   last_updated: string | null
 }
@@ -105,8 +108,20 @@ export default function IndicatorStats() {
     )
   }
 
-  const summary = stats.summary || { total_trades: 0, win_rate: 0, avg_win: 0, avg_loss: 0, total_pnl: 0 }
   const regimes = ['bull', 'bear', 'chop']
+
+  // Calculate totals from regime_stats
+  const totalWins = Object.values(stats.regime_stats).reduce((sum, r) => sum + (r?.wins || 0), 0)
+  const totalLosses = Object.values(stats.regime_stats).reduce((sum, r) => sum + (r?.losses || 0), 0)
+  const totalTrades = totalWins + totalLosses
+  const overallWinRate = totalTrades > 0 ? (totalWins / totalTrades * 100) : 0
+
+  // Calculate total P&L and averages from trade history
+  const totalPnl = stats.trade_history.reduce((sum, t) => sum + (t.pnl || 0), 0)
+  const wins = stats.trade_history.filter(t => t.win)
+  const losses = stats.trade_history.filter(t => !t.win)
+  const avgWin = wins.length > 0 ? wins.reduce((sum, t) => sum + t.pnl, 0) / wins.length : 0
+  const avgLoss = losses.length > 0 ? losses.reduce((sum, t) => sum + t.pnl, 0) / losses.length : 0
 
   return (
     <div className="space-y-4">
@@ -116,26 +131,26 @@ export default function IndicatorStats() {
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           <div>
             <p className="text-xs text-gray-400 uppercase">Total Trades</p>
-            <p className="text-xl font-bold text-accent">{summary.total_trades}</p>
+            <p className="text-xl font-bold text-accent">{totalTrades}</p>
           </div>
           <div>
             <p className="text-xs text-gray-400 uppercase">Win Rate</p>
-            <p className={`text-xl font-bold ${summary.win_rate >= 50 ? 'text-green-400' : 'text-red-400'}`}>
-              {summary.win_rate.toFixed(1)}%
+            <p className={`text-xl font-bold ${overallWinRate >= 50 ? 'text-green-400' : 'text-red-400'}`}>
+              {overallWinRate.toFixed(1)}%
             </p>
           </div>
           <div>
             <p className="text-xs text-gray-400 uppercase">Avg Win</p>
-            <p className="text-xl font-bold text-green-400">${summary.avg_win.toFixed(2)}</p>
+            <p className="text-xl font-bold text-green-400">${avgWin.toFixed(2)}</p>
           </div>
           <div>
             <p className="text-xs text-gray-400 uppercase">Avg Loss</p>
-            <p className="text-xl font-bold text-red-400">${summary.avg_loss.toFixed(2)}</p>
+            <p className="text-xl font-bold text-red-400">${avgLoss.toFixed(2)}</p>
           </div>
           <div>
             <p className="text-xs text-gray-400 uppercase">Total P&L</p>
-            <p className={`text-xl font-bold ${summary.total_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-              ${summary.total_pnl >= 0 ? '+' : ''}{summary.total_pnl.toFixed(2)}
+            <p className={`text-xl font-bold ${totalPnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+              ${totalPnl >= 0 ? '+' : ''}{totalPnl.toFixed(2)}
             </p>
           </div>
         </div>
@@ -191,7 +206,7 @@ export default function IndicatorStats() {
                     <div className="flex justify-between text-sm mb-1">
                       <span className="text-gray-400">95% CI:</span>
                       <span className="text-gray-300">
-                        [{(binomial.confidence_interval[0] * 100).toFixed(0)}% - {(binomial.confidence_interval[1] * 100).toFixed(0)}%]
+                        [{(binomial.ci_lower * 100).toFixed(0)}% - {(binomial.ci_upper * 100).toFixed(0)}%]
                       </span>
                     </div>
                     <div className="flex justify-between text-sm mb-2">
@@ -207,7 +222,7 @@ export default function IndicatorStats() {
                         ? 'bg-green-900/50 text-green-300'
                         : 'bg-yellow-900/50 text-yellow-300'
                     }`}>
-                      {binomial.reliable ? 'Statistically Reliable' : `Need ${20 - total} more trades`}
+                      {binomial.reliable ? 'Statistically Reliable' : `Need ${20 - (binomial.n_trades || 0)} more trades`}
                     </div>
                   </>
                 )}
@@ -231,7 +246,7 @@ export default function IndicatorStats() {
       </div>
 
       {/* Kelly Criterion */}
-      {stats.kelly_stats && !stats.kelly_stats.error && (
+      {stats.kelly_stats && stats.kelly_stats.kelly_fraction !== undefined && !stats.kelly_stats.error && (
         <div className="bg-surface rounded-lg p-4 border border-gray-700">
           <h3 className="text-lg font-bold mb-3">Kelly Criterion</h3>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
