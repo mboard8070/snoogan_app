@@ -1,6 +1,6 @@
 # code/trader/strategy_15m.py – 15-minute vertical credit spread strategy (Alpaca Data)
 # REFACTORED: Fixed dashboard issues with proper logging, error handling, and state management
-# Updated: $2 width spreads, min credit $0.40, delta 25-40, faster exits (25% PT, 50% SL)
+# Updated: $5 width spreads, min credit $0.40, delta 25-40, faster exits (25% PT, 50% SL)
 # Added: End-of-day forced closeout at/after 4:00 PM EST
 
 import os
@@ -110,7 +110,7 @@ NYSE_HOLIDAYS_2026 = {
 class TradingStrategy15m:
     """15-minute timeframe vertical credit spread strategy"""
 
-    def __init__(self):
+    def __init__(self, brain=None):
         self.prefix = "[15m]"
         self._strategy_ready_sent = False
         self.trades_today = []
@@ -126,15 +126,17 @@ class TradingStrategy15m:
             logger.error(f"{self.prefix} Failed to initialize: {e}", exc_info=True)
             raise
 
-        # Initialize brain for trade decisions
-        self.brain = None
-        if BRAIN_AVAILABLE:
+        # Use shared brain if provided, otherwise create own instance
+        self.brain = brain
+        if self.brain is None and BRAIN_AVAILABLE:
             try:
                 self.brain = SnoogansBrain()
                 logger.info(f"{self.prefix} Brain loaded - will use historical patterns for trade decisions")
             except Exception as e:
                 logger.warning(f"{self.prefix} Brain not available: {e}")
                 self.brain = None
+        elif self.brain is not None:
+            logger.info(f"{self.prefix} Using shared brain instance")
 
         # Initialize adaptive learner for RL-based entry decisions
         self.learner = None
@@ -891,13 +893,13 @@ class TradingStrategy15m:
             logger.debug(f"{self.prefix} [{ticker}] No suitable short strikes")
             return
 
-        # Find valid $2-wide spreads
+        # Find valid $5-wide spreads
         candidates = self._find_spread_candidates(
             short_candidates, opts, is_put, strike_col
         )
 
         if not candidates:
-            logger.info(f"{self.prefix} [{ticker}] SKIP: No valid $2-wide spreads >= $0.40")
+            logger.info(f"{self.prefix} [{ticker}] SKIP: No valid $5-wide spreads >= $0.40")
             return
 
         # Select best credit spread
@@ -1027,12 +1029,12 @@ class TradingStrategy15m:
     def _find_spread_candidates(self, short_candidates: pd.DataFrame,
                                opts: pd.DataFrame, is_put: bool,
                                strike_col: str) -> List[Tuple[float, pd.Series, pd.Series]]:
-        """Find valid $2-wide spread combinations (tighter = smaller max loss)"""
+        """Find valid $5-wide spread combinations"""
         candidates = []
 
         for _, short_row in short_candidates.iterrows():
             short_strike = short_row[strike_col]
-            target_long_strike = short_strike - 2 if is_put else short_strike + 2
+            target_long_strike = short_strike - 5 if is_put else short_strike + 5
 
             long_opts = opts[opts[strike_col] == target_long_strike]
             if long_opts.empty:

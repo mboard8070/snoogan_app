@@ -23,6 +23,65 @@ import re
 import numpy as np
 from scipy.stats import norm
 from scipy.optimize import brentq
+import time as time_mod
+import logging
+
+# Configure logging for cache diagnostics
+logger = logging.getLogger(__name__)
+
+# =============================================================================
+# MODULE-LEVEL MARKET DATA CACHE
+# =============================================================================
+# Shared cache across all strategies to eliminate redundant API calls
+# Key format: (method_name, ticker, timeframe/expiration, start_time_rounded)
+# TTL: 15 seconds for bars, 12 seconds for option chains
+
+_market_data_cache = {}
+_BARS_CACHE_TTL = 15  # seconds
+_CHAIN_CACHE_TTL = 12  # seconds
+_MARK_CACHE_TTL = 5   # seconds (more volatile)
+
+
+def _cache_key_for_bars(ticker: str, timeframe: str, start: datetime, end: datetime) -> tuple:
+    """Generate cache key for bar data, rounded to 10-second intervals"""
+    # Round start/end to reduce cache misses from minor time differences
+    start_rounded = start.replace(second=(start.second // 10) * 10, microsecond=0)
+    end_rounded = end.replace(second=(end.second // 10) * 10, microsecond=0)
+    return ('bars', ticker, timeframe, start_rounded.isoformat(), end_rounded.isoformat())
+
+
+def _cache_key_for_chain(ticker: str, expiration: str) -> tuple:
+    """Generate cache key for option chain data"""
+    return ('chain', ticker, expiration)
+
+
+def _cache_key_for_mark(ticker: str) -> tuple:
+    """Generate cache key for underlying mark"""
+    return ('mark', ticker)
+
+
+def _get_cached(key: tuple, ttl: int):
+    """Get data from cache if not expired"""
+    if key in _market_data_cache:
+        ts, data = _market_data_cache[key]
+        if time_mod.time() - ts < ttl:
+            logger.debug(f"[CACHE HIT] {key[0]}:{key[1]}")
+            return data, True
+    return None, False
+
+
+def _set_cached(key: tuple, data):
+    """Store data in cache with current timestamp"""
+    if data is not None:
+        _market_data_cache[key] = (time_mod.time(), data)
+        logger.debug(f"[CACHE SET] {key[0]}:{key[1]}")
+
+
+def clear_market_data_cache():
+    """Clear the entire cache (useful for testing or forced refresh)"""
+    global _market_data_cache
+    _market_data_cache = {}
+    logger.info("[CACHE] Cleared all market data cache")
 
 # --- Black-Scholes Model Functions ---
 def black_scholes_price(S, K, T, r, sigma, option_type):
@@ -80,6 +139,12 @@ if DATA_PROVIDER == "alpaca":
             self.mode = MODE
 
         def get_spy_bars(self, start: datetime, end: datetime, ticker: str = "SPY", timeframe: str = "1Min") -> pd.DataFrame:
+            # Check cache first
+            cache_key = _cache_key_for_bars(ticker, timeframe, start, end)
+            cached_data, hit = _get_cached(cache_key, _BARS_CACHE_TTL)
+            if hit:
+                return cached_data
+
             # Map string timeframe to Alpaca TimeFrame
             tf_map = {
                 "1Min": TimeFrame.Minute,
@@ -101,7 +166,7 @@ if DATA_PROVIDER == "alpaca":
             bars = self.stock_client.get_stock_bars(request)
             df = bars.df
             if df.empty:
-                print(f"[DATA] No bars returned for {ticker}")
+                logger.debug(f"[DATA] No bars returned for {ticker}")
                 return df
 
             # Handle MultiIndex (symbol + timestamp)
@@ -115,6 +180,9 @@ if DATA_PROVIDER == "alpaca":
             # Sort just in case
             df = df.sort_index()
 
+            # Cache the result
+            _set_cached(cache_key, df)
+
             return df
 
         def get_underlying_mark(self, symbol: str = "SPY") -> float | None:
@@ -123,6 +191,12 @@ if DATA_PROVIDER == "alpaca":
             Requires Algo Trader Plus (paid) subscription.
             Returns midpoint (bid+ask)/2 if available, else latest trade price, else None.
             """
+            # Check cache first (shorter TTL for real-time marks)
+            cache_key = _cache_key_for_mark(symbol)
+            cached_data, hit = _get_cached(cache_key, _MARK_CACHE_TTL)
+            if hit:
+                return cached_data
+
             request = StockSnapshotRequest(
                 symbol_or_symbols=symbol,
                 feed=DataFeed.SIP  # Critical: uses full consolidated real-time quotes
@@ -134,22 +208,30 @@ if DATA_PROVIDER == "alpaca":
                 # Prefer quote midpoint
                 if data.latest_quote and data.latest_quote.bid_price > 0 and data.latest_quote.ask_price > 0:
                     mark = (data.latest_quote.bid_price + data.latest_quote.ask_price) / 2
-                    print(f"[DATA] {symbol} SIP mark (quote): {mark:.2f}")
+                    logger.debug(f"[DATA] {symbol} SIP mark (quote): {mark:.2f}")
+                    _set_cached(cache_key, mark)
                     return mark
 
                 # Fallback to latest trade
                 if data.latest_trade and data.latest_trade.price > 0:
                     mark = data.latest_trade.price
-                    print(f"[DATA] {symbol} SIP mark (trade fallback): {mark:.2f}")
+                    logger.debug(f"[DATA] {symbol} SIP mark (trade fallback): {mark:.2f}")
+                    _set_cached(cache_key, mark)
                     return mark
 
-                print(f"[DATA] {symbol} No valid quote or trade in SIP snapshot")
+                logger.debug(f"[DATA] {symbol} No valid quote or trade in SIP snapshot")
             except Exception as e:
-                print(f"[DATA] {symbol} SIP snapshot failed: {e}")
+                logger.warning(f"[DATA] {symbol} SIP snapshot failed: {e}")
 
             return None
 
         def get_spy_option_chain(self, expiration_date: str, ticker: str = "SPY") -> pd.DataFrame:
+            # Check cache first
+            cache_key = _cache_key_for_chain(ticker, expiration_date)
+            cached_data, hit = _get_cached(cache_key, _CHAIN_CACHE_TTL)
+            if hit:
+                return cached_data
+
             request = OptionChainRequest(
                 underlying_symbol=ticker,
                 expiration_date=expiration_date
@@ -161,6 +243,7 @@ if DATA_PROVIDER == "alpaca":
             try:
                 end_time = datetime.now()
                 start_time = end_time - timedelta(minutes=5)
+                # This call will also use the cache
                 current_bars = self.get_spy_bars(start_time, end_time, ticker=ticker)
                 S = current_bars['close'].iloc[-1] if not current_bars.empty else {"SPY": 680.0, "QQQ": 480.0, "IWM": 220.0}.get(ticker, 100.0)
             except Exception:
@@ -207,7 +290,12 @@ if DATA_PROVIDER == "alpaca":
                     "implied_volatility": calc_iv,
                 })
 
-            return pd.DataFrame(rows)
+            result = pd.DataFrame(rows)
+
+            # Cache the result
+            _set_cached(cache_key, result)
+
+            return result
 
         def get_spx_option_chain(self, expiration_date: str) -> pd.DataFrame:
             return self.get_spy_option_chain(expiration_date, ticker="SPY")

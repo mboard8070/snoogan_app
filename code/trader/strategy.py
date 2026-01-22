@@ -1,12 +1,13 @@
 # code/trader/strategy.py – 1-minute vertical credit spread strategy (Alpaca Data)
 # REFACTORED: Fixed dashboard issues with proper logging, error handling, and state management
-# Updated: $2 width spreads, min credit $0.40, delta 25-40, faster exits (25% PT, 50% SL)
+# Updated: $5 width spreads, min credit $0.40, delta 25-40, faster exits (25% PT, 50% SL)
 # Added: End-of-day forced closeout at/after 4:00 PM EST
 
 import os
 import json
 import pandas as pd
 import logging
+import time as time_mod
 from pathlib import Path
 from datetime import datetime, timedelta, time, date
 from zoneinfo import ZoneInfo
@@ -106,13 +107,14 @@ NYSE_HOLIDAYS_2026 = {
 
 class TradingStrategy:
     """1-minute timeframe vertical credit spread strategy with XGBoost trend prediction"""
-    
-    def __init__(self):
+
+    def __init__(self, brain=None):
         self.prefix = "[1m]"
         self._strategy_ready_sent = False
         self.trades_today = []
         self.last_lstm_train_date = None
         self.current_trends = {}  # Track current trend for each ticker
+        self._cache = {}  # Simple in-memory cache: key -> (timestamp, data)
 
         # Load state with error handling
         try:
@@ -123,15 +125,17 @@ class TradingStrategy:
             logger.error(f"{self.prefix} Failed to initialize: {e}", exc_info=True)
             raise
 
-        # Initialize brain for trade decisions
-        self.brain = None
-        if BRAIN_AVAILABLE:
+        # Use shared brain if provided, otherwise create own instance
+        self.brain = brain
+        if self.brain is None and BRAIN_AVAILABLE:
             try:
                 self.brain = SnoogansBrain()
                 logger.info(f"{self.prefix} Brain loaded - will use historical patterns for trade decisions")
             except Exception as e:
                 logger.warning(f"{self.prefix} Brain not available: {e}")
                 self.brain = None
+        elif self.brain is not None:
+            logger.info(f"{self.prefix} Using shared brain instance")
 
         # Initialize adaptive learner for RL-based entry decisions
         self.learner = None
@@ -156,6 +160,25 @@ class TradingStrategy:
         except Exception as e:
             logger.error(f"{self.prefix} Lock error: {e}", exc_info=True)
             raise
+
+    def _cached_fetch(self, key: Tuple, fetch_func, ttl: int = 10):
+        """Simple cache with TTL to reduce API calls within a cycle"""
+        now = time_mod.time()
+
+        if key in self._cache:
+            ts, data = self._cache[key]
+            if now - ts < ttl:
+                logger.debug(f"{self.prefix} Cache hit for {key}")
+                return data
+
+        try:
+            data = fetch_func()
+            if data is not None:
+                self._cache[key] = (now, data)
+            return data
+        except Exception as e:
+            logger.error(f"{self.prefix} Error in cached fetch for {key}: {e}")
+            return None
 
     def _load_state(self):
         """Load strategy state from JSON file with file locking"""
@@ -182,6 +205,10 @@ class TradingStrategy:
                     self.closed_trades = state.get('closed_trades', [])
                     self.current_trends = state.get('current_trends', {})
                     self.trades_today = state.get('trades_today', [])
+                    # Load last training date to avoid re-training on restart
+                    last_train = state.get('last_lstm_train_date')
+                    if last_train:
+                        self.last_lstm_train_date = date.fromisoformat(last_train)
 
             # Reset daily P&L and trades_today if new day
             if self.last_pnl_date != date.today().isoformat():
@@ -215,6 +242,7 @@ class TradingStrategy:
             'closed_trades': self.closed_trades,
             'current_trends': self.current_trends,
             'trades_today': self.trades_today,
+            'last_lstm_train_date': self.last_lstm_train_date.isoformat() if self.last_lstm_train_date else None,
         }
 
         def json_serializer(obj):
@@ -354,27 +382,50 @@ class TradingStrategy:
         return calculated
 
     def _train_model_if_needed(self, now: datetime):
-        """Train XGBoost model once per trading day"""
+        """Train XGBoost model once per trading day (non-blocking)"""
+        import threading
+
         current_date = now.date()
 
-        if self.last_lstm_train_date != current_date and self.is_trading_day():
-            logger.info(f"{self.prefix} New trading day - starting XGBoost training")
+        # Check if already trained today (persisted in state file)
+        if hasattr(self, '_training_in_progress') and self._training_in_progress:
+            logger.debug(f"{self.prefix} XGBoost training already in progress - skipping")
+            return
 
+        if self.last_lstm_train_date == current_date:
+            return  # Already trained today
+
+        if not self.is_trading_day():
+            return
+
+        # Run training in background thread to avoid blocking UI
+        def _background_train():
             try:
+                self._training_in_progress = True
+                logger.info(f"{self.prefix} Starting XGBoost training in background...")
+
                 historical_bars = data_client.get_spy_bars(
                     now - timedelta(days=60), now, ticker="SPY"
                 )
 
                 if historical_bars is not None and not historical_bars.empty:
                     logger.info(f"{self.prefix} Training XGBoost with {len(historical_bars)} bars")
-                    train_lstm_daily(historical_bars)  # Function now calls XGBoost internally
+                    train_lstm_daily(historical_bars)
                     self.last_lstm_train_date = current_date
+                    self._save_state()  # Persist training date
                     logger.info(f"{self.prefix} XGBoost training complete")
                 else:
                     logger.warning(f"{self.prefix} No bars received - skipping model training")
-
             except Exception as e:
                 logger.error(f"{self.prefix} Model training failed: {e}", exc_info=True)
+            finally:
+                self._training_in_progress = False
+
+        # Start background thread
+        self._training_in_progress = True
+        thread = threading.Thread(target=_background_train, daemon=True)
+        thread.start()
+        logger.info(f"{self.prefix} XGBoost training started in background thread")
 
     def run_cycle(self):
         """Main strategy cycle - called periodically"""
@@ -523,43 +574,37 @@ class TradingStrategy:
             logger.debug(f"{self.prefix} [{ticker}] Monitoring existing position")
 
     def _fetch_minute_bars(self, ticker: str, now: datetime) -> Optional[pd.DataFrame]:
-        """Fetch minute bars with error handling"""
-        try:
-            minute_bars = data_client.get_spy_bars(
-                now - timedelta(days=7),
-                now,
-                ticker=ticker
-            )
+        """Fetch minute bars with caching"""
+        minute_bars = self._cached_fetch(
+            ('bars', ticker),
+            lambda: data_client.get_spy_bars(now - timedelta(days=7), now, ticker=ticker),
+            ttl=10
+        )
 
-            if minute_bars is None or minute_bars.empty or len(minute_bars) < 20:
-                logger.debug(f"{self.prefix} [{ticker}] Insufficient minute bars")
-                return None
-
-            return minute_bars
-
-        except Exception as e:
-            logger.error(f"{self.prefix} [{ticker}] Error fetching bars: {e}")
+        if minute_bars is None or minute_bars.empty or len(minute_bars) < 20:
+            logger.debug(f"{self.prefix} [{ticker}] Insufficient minute bars")
             return None
 
+        return minute_bars
+
     def _fetch_15m_bars(self, ticker: str, now: datetime) -> Optional[pd.DataFrame]:
-        """Fetch 15-minute bars for higher timeframe bias"""
-        try:
-            bars_15m = data_client.get_spy_bars(
+        """Fetch 15-minute bars for higher timeframe bias with caching"""
+        bars_15m = self._cached_fetch(
+            ('bars_15m', ticker),
+            lambda: data_client.get_spy_bars(
                 now - timedelta(days=7),
                 now,
                 ticker=ticker,
                 timeframe="15Min"
-            )
+            ),
+            ttl=60  # Cache 15m bars for 60 seconds
+        )
 
-            if bars_15m is None or bars_15m.empty or len(bars_15m) < 20:
-                logger.debug(f"{self.prefix} [{ticker}] Insufficient 15m bars")
-                return None
-
-            return bars_15m
-
-        except Exception as e:
-            logger.debug(f"{self.prefix} [{ticker}] Error fetching 15m bars: {e}")
+        if bars_15m is None or bars_15m.empty or len(bars_15m) < 20:
+            logger.debug(f"{self.prefix} [{ticker}] Insufficient 15m bars")
             return None
+
+        return bars_15m
 
     def _get_higher_timeframe_bias(self, ticker: str, now: datetime) -> Optional[str]:
         """Get 15m trend as higher timeframe directional bias"""
@@ -575,19 +620,18 @@ class TradingStrategy:
             return None
 
     def _fetch_option_chain(self, ticker: str, expiration: str) -> Optional[pd.DataFrame]:
-        """Fetch option chain with error handling"""
-        try:
-            chain = data_client.get_spy_option_chain(expiration, ticker=ticker)
-            
-            if chain is None or chain.empty:
-                logger.debug(f"{self.prefix} [{ticker}] Empty option chain")
-                return None
-                
-            return chain
-            
-        except Exception as e:
-            logger.error(f"{self.prefix} [{ticker}] Error fetching chain: {e}")
+        """Fetch option chain with caching"""
+        chain = self._cached_fetch(
+            ('chain', ticker),
+            lambda: data_client.get_spy_option_chain(expiration, ticker=ticker),
+            ttl=8
+        )
+
+        if chain is None or chain.empty:
+            logger.debug(f"{self.prefix} [{ticker}] Empty option chain")
             return None
+
+        return chain
 
     def _get_spread_price(self, short_contract: Dict, long_contract: Dict, for_entry: bool = False) -> Optional[float]:
         """Calculate net credit for a vertical spread"""
@@ -886,13 +930,13 @@ class TradingStrategy:
             logger.info(f"{self.prefix} [{ticker}] SKIP: No suitable short strikes (delta 20-45 or OTM)")
             return
 
-        # Find valid $2-wide spreads
+        # Find valid $5-wide spreads
         candidates = self._find_spread_candidates(
             short_candidates, opts, is_put, strike_col
         )
 
         if not candidates:
-            logger.info(f"{self.prefix} [{ticker}] SKIP: No valid $2-wide spreads >= $0.40")
+            logger.info(f"{self.prefix} [{ticker}] SKIP: No valid $5-wide spreads >= $0.40")
             return
 
         # Select best credit spread
@@ -1020,12 +1064,12 @@ class TradingStrategy:
     def _find_spread_candidates(self, short_candidates: pd.DataFrame,
                                opts: pd.DataFrame, is_put: bool,
                                strike_col: str) -> List[Tuple[float, pd.Series, pd.Series]]:
-        """Find valid $2-wide spread combinations (tighter = smaller max loss)"""
+        """Find valid $5-wide spread combinations"""
         candidates = []
 
         for _, short_row in short_candidates.iterrows():
             short_strike = short_row[strike_col]
-            target_long_strike = short_strike - 2 if is_put else short_strike + 2
+            target_long_strike = short_strike - 5 if is_put else short_strike + 5
 
             long_opts = opts[opts[strike_col] == target_long_strike]
             if long_opts.empty:

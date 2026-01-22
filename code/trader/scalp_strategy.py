@@ -109,25 +109,27 @@ NYSE_HOLIDAYS = {
 
 class ScalpStrategy:
     """ATM directional option scalping strategy"""
-    
-    def __init__(self, use_brain: bool = True):
+
+    def __init__(self, use_brain: bool = True, brain=None):
         self.prefix = "[SCALP]"
         self._strategy_ready_sent = False
         self.trades_today = []
         self.last_exit = {}  # ticker: ('direction', datetime)
         self._cache = {}  # Simple in-memory cache: key -> (timestamp, data)
         self.current_trends = {}  # Track current trend for each ticker
-        self.brain = None
         self.use_brain = use_brain
 
-        # Initialize brain for trade decisions
-        if use_brain and BRAIN_AVAILABLE:
+        # Use shared brain if provided, otherwise create own instance
+        self.brain = brain
+        if self.brain is None and use_brain and BRAIN_AVAILABLE:
             try:
                 self.brain = SnoogansBrain()
                 logger.info(f"{self.prefix} Brain loaded - will use historical patterns for trade decisions")
             except Exception as e:
                 logger.warning(f"{self.prefix} Brain not available: {e}")
                 self.brain = None
+        elif self.brain is not None:
+            logger.info(f"{self.prefix} Using shared brain instance")
 
         # Initialize adaptive learner for RL-based entry decisions
         self.learner = None

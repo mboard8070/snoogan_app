@@ -307,15 +307,18 @@ def get_snoogans_response(question: str) -> str:
 
 def initialize_session_state() -> None:
     """Initialize all session state variables."""
+    # Load shared brain instance (cached by Streamlit)
+    shared_brain = load_brain()
+
     if "strategy_1m" not in st.session_state:
-        st.session_state.strategy_1m = TradingStrategy()
-    
+        st.session_state.strategy_1m = TradingStrategy(brain=shared_brain)
+
     if "strategy_15m" not in st.session_state:
-        st.session_state.strategy_15m = TradingStrategy15m()
-    
+        st.session_state.strategy_15m = TradingStrategy15m(brain=shared_brain)
+
     if "strategy_scalp" not in st.session_state:
-        st.session_state.strategy_scalp = ScalpStrategy()
-    
+        st.session_state.strategy_scalp = ScalpStrategy(brain=shared_brain)
+
     if "chat" not in st.session_state:
         st.session_state.chat = [
             {"role": "assistant", "content": "Router active. Standing by."}
@@ -966,11 +969,10 @@ def render_learner_monitor() -> None:
 def render_trading_logs() -> None:
     """Render the trading logs section with auto-updating fragments."""
     st.write(f"Last Heartbeat: {datetime.now().strftime('%H:%M:%S')}")
-    
+
     # 1-Minute Strategy Log
     st.subheader("🖥️ 1-Minute Iron Spark Log")
-    log_display_1m = st.empty()
-    
+
     @st.fragment(run_every=CONFIG.STRATEGY_1M_REFRESH_SECONDS)
     def sync_1m_cycle():
         output_buffer = io.StringIO()
@@ -991,7 +993,7 @@ def render_trading_logs() -> None:
 
         if error_msg:
             st.error(error_msg)
-        log_display_1m.code(combined_output, language="bash", wrap_lines=True)
+        st.code(combined_output, language="bash", wrap_lines=True)
 
         send_greeting_if_needed()
         # Calculate TOTAL trades_today and daily_pnl from ALL strategies for EOD notification
@@ -1016,7 +1018,6 @@ def render_trading_logs() -> None:
 
     # 15-Minute Strategy Log
     st.subheader("🖥️ 15-Minute Iron Spark Log")
-    log_display_15m = st.empty()
 
     @st.fragment(run_every=CONFIG.STRATEGY_15M_REFRESH_SECONDS)
     def sync_15m_cycle():
@@ -1038,7 +1039,7 @@ def render_trading_logs() -> None:
 
         if error_msg:
             st.error(error_msg)
-        log_display_15m.code(combined_output, language="bash", wrap_lines=True)
+        st.code(combined_output, language="bash", wrap_lines=True)
 
         send_greeting_if_needed()
         # EOD notification is sent from 1m strategy section with combined totals
@@ -1059,7 +1060,6 @@ def render_trading_logs() -> None:
 
     # Scalp Strategy Log
     st.subheader("🖥️ Scalp Iron Spark Log")
-    log_display_scalp = st.empty()
 
     @st.fragment(run_every=CONFIG.STRATEGY_SCALP_REFRESH_SECONDS)
     def sync_scalp_cycle():
@@ -1081,7 +1081,7 @@ def render_trading_logs() -> None:
 
         if error_msg:
             st.error(error_msg)
-        log_display_scalp.code(combined_output, language="bash", wrap_lines=True)
+        st.code(combined_output, language="bash", wrap_lines=True)
 
         send_greeting_if_needed()
         # EOD notification is sent from 1m strategy section with combined totals
