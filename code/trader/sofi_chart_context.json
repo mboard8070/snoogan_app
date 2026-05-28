@@ -1,0 +1,15 @@
+{
+  "updated_at": "2026-05-27T20:48:32.933992",
+  "symbol": "SOFI",
+  "bias": "bullish_base_watch",
+  "latest_read": "Price is slightly below EMA9/EMA21/EMA50 on cached 5-minute candles; wait for reclaim or clear support before bullish put credit spread.",
+  "prefer": "put_credit_spread_after_reclaim_or_support_hold",
+  "avoid": "call_credit_spread_unless_breakdown_confirmed",
+  "entry_requirements": [
+    "support holding",
+    "price reclaiming or above short EMA/VWAP",
+    "XGBoost not strongly bearish",
+    "fee-aware max risk inside budget",
+    "3-week $1-wide spread"
+  ]
+}

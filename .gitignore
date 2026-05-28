@@ -6190,3 +6190,8 @@ venv/
 # Shared equity files
 shared_equity.json
 shared_equity_history.json
+# Generated SOFI/news scanner artifacts
+data/market_cache/
+data/news/
+code/trader/sofi_spread_strategy_state.json
+code/trader/sofi_xgb_model.pkl

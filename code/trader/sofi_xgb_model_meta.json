@@ -1,0 +1,37 @@
+{
+  "accuracy": 0.5827067669172933,
+  "class_counts": {
+    "0": 1710,
+    "1": 4499,
+    "2": 1771
+  },
+  "end": "2026-05-27T20:30:00-04:00",
+  "features": [
+    "rsi_14",
+    "rsi_7",
+    "macd_line",
+    "macd_signal",
+    "macd_hist",
+    "ema_cross_9_21",
+    "ema_cross_21_50",
+    "price_vs_ema9",
+    "price_vs_ema21",
+    "price_vs_vwap",
+    "atr_pct",
+    "returns_5",
+    "returns_10",
+    "returns_20",
+    "vol_ratio",
+    "price_position",
+    "body_pct",
+    "upper_wick",
+    "lower_wick",
+    "time_of_day"
+  ],
+  "horizon_bars": 18,
+  "rows": 7980,
+  "start": "2026-04-16T11:15:00-04:00",
+  "test_rows": 1596,
+  "threshold_pct": 0.35,
+  "train_rows": 6384
+}

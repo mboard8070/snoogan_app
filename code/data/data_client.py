@@ -307,6 +307,9 @@ elif DATA_PROVIDER == "polygon":
         def get_spy_option_chain(self, expiration_date, ticker="SPY"): raise NotImplementedError
         def get_underlying_mark(self, symbol="SPY"): raise NotImplementedError
 
+elif DATA_PROVIDER == "tastytrade":
+    from code.data.tastytrade_data_client import TastytradeDataClient as DataClient
+
 # ── LAZY SINGLETON ──
 _instance = None
 def get_data_client():
